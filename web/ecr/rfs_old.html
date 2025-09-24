@@ -1,0 +1,564 @@
+<!-- Generate Intersection Dynamic Map -->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>intxn V2X Applications Demo</title>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <style>
+        .tab {
+            display: none;
+        }
+        .tab.active {
+            display: block;
+        }
+        .tab-links {
+            cursor: pointer;
+            padding: 10px;
+            background-color: #f1f1f1;
+            display: inline-block;
+        }
+        .tab-links.active {
+            background-color: #ccc;
+        }
+        /* #bsm {
+            height: 640px;
+            width: 640px;
+        } */
+        #sidebar {
+            width: 200px;
+            height: 90%;
+            position: absolute;
+            left: 0;
+            color: white;
+            background-color: #165391;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        #vmapContent {
+            margin-left: 220px; /* Adjust this value based on the width of your sidebar */
+        } 
+        .state-box {
+            margin-top: 10px; 
+            padding: 10px; 
+            background-color: #f1f1f1;
+            border: 2px solid #165391;
+        }
+        .signal-indicator {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: 2px solid #333;
+            vertical-align: middle;
+            /* The background-color will be set dynamically */
+        }
+    </style>
+    <script>
+        const SERVER_URL = 'https://128.32.129.118'; 
+        //// 'http://128.32.129.118';
+        const SERVER_PORT = 5000;
+        const SOCKET_PORT = 5000;
+
+        // Connect to the WebSocket server
+        const socket = io(`${SERVER_URL}:${SOCKET_PORT}`, { 
+            secure: true,
+            rejectUnauthorized: false
+        });
+
+        let mapsScript;
+        let mapsScriptLoaded = false;
+        let map3dElement;
+        let map;
+        let vmap_notloaded = true;
+
+        const lineColor = {
+            64: 'green',    // egress 
+            128:'blue',    // ingress
+            192: 'orange' // bi-directional
+        };
+
+        async function importGMPLib() {
+            const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+        }
+
+        // Load the Google Maps JavaScript API
+        async function loadGMPsAPI() {
+            if (mapsScriptLoaded) {
+                return Promise.resolve();
+            }
+
+            // Fetch the API key from the server
+            const apiKeyResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/key`);
+            const apiKeyData = await apiKeyResponse.json();
+            const apiKey = apiKeyData.api_key;
+
+
+            return new Promise((resolve, reject) => {
+                /* // Add the gmp-map-3d element dynamically
+                map3dElement = document.createElement('gmp-map-3d');
+                map3dElement.setAttribute('mode', 'hybrid');
+                map3dElement.setAttribute('center', '37.841157, -122.551679'); // Example coordinates
+                map3dElement.setAttribute('range', '2000');
+                map3dElement.setAttribute('tilt', '75');
+                map3dElement.setAttribute('heading', '330');
+                document.head.appendChild(map3dElement);
+                */
+
+                mapsScript = document.createElement('script');
+                mapsScript.async = true;
+                mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&v=alpha&libraries=maps3d`;
+                // mapsScript.defer = true;
+                mapsScript.onload = () => {
+                    mapsScriptLoaded = true;
+                    resolve();
+                };
+                mapsScript.onerror = reject;
+                document.head.appendChild(mapsScript);
+
+                /* mapsScript = document.createElement('script');
+                mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`; 
+                mapsScript.async = true;
+                mapsScript.defer = true;
+                mapsScript.onload = () => {
+                    mapsScriptLoaded = true;
+                    resolve();
+                };
+                mapsScript.onerror = reject;
+                document.head.appendChild(mapsScript);
+                */
+            });
+        }
+
+        function removeGoogleMapsAPI() {
+            if (mapsScript) {
+                document.head.removeChild(mapsScript);
+                document.head.removeChild(map3dElement);
+                mapsScript = null;
+                mapsScriptLoaded = false;
+            }
+        }
+
+
+        // async function bsmTraj() {
+        //     try {
+
+        //         // Remove the Google Maps API if it was previously loaded
+        //         // await loadGMPsAPI();
+        //         const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+
+        //         // Create the 3D map using google.maps.Map
+        //         map = new google.maps.Map(document.getElementById("sceneContent"), {
+        //             mapId: "DEMO-MAP-ID" // Replace with your Google Maps Map ID
+        //         });
+        //         // Create the map
+        //         // map = new google.maps.Map(document.getElementById("bsmContent"));
+
+        //         // Fetch initial marker coordinates from the API
+        //         const markersResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/markers`);
+        //         const markers = await markersResponse.json();
+                
+        //         markers[0].lat = 37.915410;
+        //         markers[0].lng = -122.334223;
+        //         // Define the custom icon
+        //         const icon = {
+        //             url: 'img/car-top.png', // Path to your local image
+        //             scaledSize: new google.maps.Size(20, 20), // Scale the image to desired size
+        //         };
+                
+        //         const marker = new AdvancedMarkerElement({
+        //             position: markers[0],
+        //             map: map,
+        //             title: "Vehicle User",
+        //             // icon: icon
+        //         });
+
+        //         // Listen for marker updates
+        //         socket.on('marker_update', (data) => {
+        //             const newPosition = new google.maps.LatLng(data.lat, data.lng);
+        //             marker.setPosition(newPosition);
+        //         });
+        //     } catch (error) {
+        //         console.error('Error initializing map:', error);
+        //     }
+        // }
+
+        function socketOff() {
+            socket.off('marker_update');
+            // socket.disconnect(); // Fully disconnect the socket
+        }
+
+        async function genIntxnList() {
+            try {
+                const site = 'RFS'; // or 'ECR', depending on the desired site
+                const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/intxn_list?site=${site}`);
+                const intxns = await response.json();
+                if (vmap_notloaded) {
+                    populateSidebar(intxns);
+                }
+                // set the tab notloaded flag to false
+                vmap_notloaded = false;
+             } catch (error) {
+            console.error('Error fetching intersection list:', error);
+            }
+        }
+
+        let lastListItem = null;
+        let lastMarker = null;
+
+        async function populateSidebar(intxns) {
+            // import marker library
+            // const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+
+            const intxnList = document.getElementById('intxnList');
+            intxns.forEach(intxn => {
+                const listItem = document.createElement('li');
+                listItem.textContent = intxn.name;
+                listItem.addEventListener('click', () => {
+                    // set the map center to the selected intersection
+                    map.setCenter(intxn.center);
+                    map.setZoom(19);
+                    
+                    // Add intersection name text at the map center using Marker
+                    if (lastMarker) {
+                        lastMarker.setMap(null); // Remove the previous marker
+                    }
+                    // const marker = new AdvancedMarkerElement({
+                    const marker = new google.maps.Marker({
+                    
+                        position: intxn.center,
+                        map: map,
+                        label: {
+                            text: intxn.name,
+                            color: 'white',
+                            fontSize: '15px',
+                            fontWeight: 'bold'
+                        },
+                        // icon: svgMarker
+                        
+                    });
+                    lastMarker = marker;
+
+                    // add lanes to the map
+                    addLanes(intxn.name);
+
+                    // show RSU states 
+                    showRSUStatus();
+                    // show SPAT states
+                    showSPATStatus();
+                    // show MEC states
+                    showMECStatus();
+
+                    // change the text color back of the last selected item
+                    if (lastListItem) {
+                        lastListItem.style.color = 'white';
+                    }
+                    // change the text color of the selected item
+                    listItem.style.color = 'red';
+                    lastListItem = listItem;
+                });
+                intxnList.appendChild(listItem);
+            });
+        }
+
+        async function addLanes(selIntxnName) {
+            try {
+                // add lane lines
+                const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/intxn_lanes`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ name: selIntxnName})
+                });
+
+                const laneLines = await response.json();
+                laneLines.forEach(laneLine => {
+                    const line = new google.maps.Polyline({
+                        path: laneLine.points.map(coord => new google.maps.LatLng(coord.lat, coord.lng)),
+                        geodesic: true,
+                        strokeColor: lineColor[laneLine.dir] || 'red',
+                        strokeOpacity: 0.8,
+                        strokeWeight: 2
+                    });
+                    line.setMap(map);
+                });
+            } catch (error) {
+                console.error('Error obtaining lanes:', error);
+            }    
+
+        }
+
+        // Show RSU state getting from "rsu_state" endpoint 
+        async function showRSUStatus() {
+            try {
+                // socket.on('rsu_state', (data) => {
+                //     const rsuStatus = document.getElementById('rsuStatus');
+                //     rsuStatus.innerHTML = `<h3>RSU State</h3>
+                //         <p>Timestamp: ${data.time_msec}</p>
+                //         <p>RSU ID: ${data.rsu_port}</p>`;
+                // });
+                const intervalId = setInterval(async () => {
+                // Replace with your API call
+                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/rsu_state`)
+                        .then(response => response.json())
+                        .then(data => {
+                            const rsuStatus = document.getElementById('rsuStatus');
+                            rsuStatus.innerHTML = `<h3>RSU State</h3>
+                                <p>Timestamp: ${data.time_msec}</p>
+                                <p>RSU Mode: ${data.radio_mode}</p>
+                                <p>RSU Enabled: ${data.radio_enable}</p>`;
+                        });
+                }, 5000); // Calls every 5 seconds
+            } catch (error) {
+                console.error('Error getting RSU state:', error);
+            }
+        }
+
+        // Show Controller state getting from "tsc_state" endpoint
+        async function showSPATStatus() {
+            try {
+                
+                const intervalId = setInterval(async () => {
+                // Replace with your API call
+                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/tsc_state`)
+                        .then(response => response.json())
+                        .then(data => {
+                            const ctrlStatus = document.getElementById('ctrlStatus');
+                            ctrlStatus.innerHTML = `<h3>TSC State</h3>
+                                <p>TSC Timestamp: ${data.time_msec}</p>
+                                <p> V2 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph2==='Green'?'green' : data.Ph2==='Yellow'?'yellow' : data.Ph2==='Red'?'red' : 'gray'};">
+                                    </span>
+                                    V4 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph4==='Green'?'green' : data.Ph4==='Yellow'?'yellow' : data.Ph4==='Red'?'red' : 'gray'};">
+                                    </span>
+                                    V6 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph6==='Green'?'green' : data.Ph6==='Yellow'?'yellow' : data.Ph6==='Red'?'red' : 'gray'};">
+                                    </span>
+                                    V8 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph8==='Green'?'green' : data.Ph8==='Yellow'?'yellow' : data.Ph8==='Red'?'red' : 'gray'};">
+                                    </span>
+                                </p>
+                                <p> P2 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph10==='Green'?'green' : data.Ph10==='Yellow'?'yellow' : data.Ph10==='Red'?'red' : 'gray'};">
+                                    </span>
+                                    P4 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph12==='Green'?'green' : data.Ph12==='Yellow'?'yellow' : data.Ph12==='Red'?'red' : 'gray'};">
+                                    </span>
+                                    P6 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph14==='Green'?'green' : data.Ph14==='Yellow'?'yellow' : data.Ph14==='Red'?'red' : 'gray'};">
+                                    </span>
+                                    P8 <span class="signal-indicator" 
+                                    style="background-color:${data.Ph16==='Green'?'green' : data.Ph16==='Yellow'?'yellow' : data.Ph16==='Red'?'red' : 'gray'};">
+                                    </span>
+                                </p>`;
+                        });
+                }, 1000); // Calls every 1 seconds
+            } catch (error) {
+                console.error('Error listening to socket:', error);
+            }
+        }
+        
+        // Show MEC state getting from "mec_state" in the rsuStatus div
+        async function showMECStatus() {
+            try {
+                const intervalId = setInterval(async () => {
+                // Replace with your API call
+                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/mec_state`)
+                        .then(response => response.json())
+                        .then(data => {
+                            const mecStatus = document.getElementById('mecStatus');
+                            mecStatus.innerHTML = `<h3>MultiAccess Edge Computing State</h3>
+                                <p>Site Name: ${data.SiteName}</p>
+                                <p>Operating Functions: 
+                                    MrpSpat: <span style="color:green;"> ${data.OprFuncs.MrpSpat}</span>  
+                                    MrpAware: ${data.OprFuncs.MrpAware} 
+                                    MsgFwd: <span style="color:green;"> ${data.OprFuncs.MsgFwd} </span>
+                                    Tci: ${data.OprFuncs.Tci} 
+                                    DataMgr: ${data.OprFuncs.DataMgr}
+                                    Sensor: ${data.OprFuncs.Sensor} 
+                                    RTCM: ${data.OprFuncs.RTCM} 
+                                </p>`;
+                        });
+                }, 5000); // Calls every 5 seconds
+            } catch (error) {
+                console.error('Error getting RSU state:', error);
+            }
+        }
+
+        async function mapValidate() {
+            try {
+                // Load the Google Maps API with the fetched API key
+                // await loadGMPsAPI();
+                
+                // Fetch map center coordinates from the API
+                const mapCenterResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/map_center`);
+                const mapCenter = await mapCenterResponse.json();
+                
+                // Create the map
+                map = new google.maps.Map(document.getElementById("vmapContent"), {
+                    zoom: 19,
+                    center: mapCenter,
+                    mapTypeId: 'satellite'
+                });
+
+                genIntxnList();
+    
+            } catch (error) {
+                console.error('Error initializing map:', error);
+            }
+        }
+
+        // Open the specified tab
+        async function openTab(event, tabName) {
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+
+            const tabLinks = document.querySelectorAll('.tab-links');
+            tabLinks.forEach(link => link.classList.remove('active'));
+
+            document.getElementById(tabName).classList.add('active');
+            if (event) {
+                event.currentTarget.classList.add('active');
+            }
+
+            // Call the appropriate function based on the tab name
+            if (tabName === 'vmap') {
+                // turn off the location update socket
+                socket.off('marker_update');
+                
+                await mapValidate();
+            } else if (tabName === 'bsm') {
+                // socket.off('rsu_state');
+
+                await bsmTraj();
+            }  else {
+                socket.off('marker_update');
+                // socket.off('rsu_state');
+            }
+        }
+
+        // window.onload = bsmTraj;
+        window.onload = async function() {
+            // load Google Maps JavaScript API
+            await loadGMPsAPI();
+
+            openTab(null, 'vmap');
+        }
+    </script>
+</head>
+<body>
+    <div>
+        <span class="tab-links active" onclick="openTab(event, 'scene')">Test Scene</span>
+        <span class="tab-links" onclick="openTab(event, 'vmap')">System Dashboard</span>
+        <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
+        <div style="position: absolute; top: 10px; right: 10px; background-color: #f1f1f1; padding: 10px; border: 1px solid #ccc;" id="dateTimeBox">
+            Loading date and time...
+        </div>
+        <script>
+            async function updateDateTime() {
+                try {
+                    const response = await fetch('https://timeapi.io/api/time/current/zone?timeZone=America%2FLos_Angeles');
+                    const data = await response.json();
+                    const dateTimeBox = document.getElementById('dateTimeBox');
+                    const formattedTime = data.dateTime.replace('T', ' ').split('.')[0];
+                    dateTimeBox.textContent = `${formattedTime}`;
+                } catch (error) {
+                    console.error('Error fetching date and time:', error);
+                }
+            }
+
+            updateDateTime();
+            setInterval(updateDateTime, 60000); // Update every 60 seconds
+        </script>
+    </div>
+    <div id="scene" class="tab active">
+        <div style="display: flex; flex-direction: column;">
+        <div id="sceneContent" style="height: 600px; width: 80%;">
+            <gmp-map-3d mode="hybrid" center="37.915410, -122.334223" range="120" tilt="80" heading="290"></gmp-map-3d> 
+        <!--    
+            <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAL3C-ABJFAXoCjrbAUVrEcBnIMegajL7M&v=alpha&libraries=maps3d">
+            </script>
+        --> 
+        </div>
+        <div id="sceneContent2" style="height: 600px; width: 80%;">
+            <gmp-map-3d mode="hybrid" center="37.915627, -122.334860" range="60" tilt="80" heading="25"></gmp-map-3d> 
+        <!--    
+            <script async src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAL3C-ABJFAXoCjrbAUVrEcBnIMegajL7M&v=alpha&libraries=maps3d">
+            </script>
+        --> 
+        </div>
+        </div>
+    </div>
+    <div id="vmap" class="tab">
+        <div style="display: flex; flex-direction: row; height: 100%;">
+            <div style="flex: 1;">
+                <div id="sidebar"><ul id="intxnList"></ul></div>
+            </div>
+            <div style="flex: 2; display: flex; flex-direction: column;">
+                <div id="vmapContent" style="position: absolute; left: 10px; height: 640px; width: 640px; "></div>
+                <div id="msgStatsBox" class="state-box" style="position: absolute; margin-top: 660px; width: 600px;">
+                    <h3>Message Statistics</h3>
+                    <table id="msgStatsTable" style="width:80%; border-collapse: collapse;">
+                        <thead>
+                            <tr>
+                                <th style="border: 1px solid #165391; padding: 5px;">Message Type</th>
+                                <th style="border: 1px solid #165391; padding: 5px;">Received Count</th>
+                                <th style="border: 1px solid #165391; padding: 5px;">Last Received</th>
+                                <th style="border: 1px solid #165391; padding: 5px;"></th>
+                                <th style="border: 1px solid #165391; padding: 5px;"></th>
+                            </tr>
+    
+                        </thead>
+                        <tbody>
+                            <!-- Rows will be populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+                <script>
+                    async function updateMsgStats() {
+                        try {
+                            const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/msg_stats`);
+                            const stats = await response.json();
+                            const tbody = document.querySelector('#msgStatsTable tbody');
+                            tbody.innerHTML = '';
+                            stats.forEach(stat => {
+                                const row = document.createElement('tr');
+                                row.innerHTML = `
+                                    <td style="border: 1px solid #165391; padding: 5px;">${stat.type}</td>
+                                    <td style="border: 1px solid #165391; padding: 5px;">${stat.count}</td>
+                                    <td style="border: 1px solid #165391; padding: 5px;">${stat.last_received}</td>
+                                `;
+                                tbody.appendChild(row);
+                            });
+                        } catch (error) {
+                            console.error('Error fetching message statistics:', error);
+                        }
+                    }
+                    updateMsgStats();
+                    setInterval(updateMsgStats, 5000);
+                </script>
+            </div>    
+            <div style="flex: 1; display: flex; flex-direction: column;">
+                    <div id="rsuStatus" class="state-box">
+                        <h3>RSU State</h3>
+                        <p>RSU State information will be displayed here.</p>
+                    </div>
+                    <div id="ctrlStatus" class="state-box">
+                        <h3>Controller State</h3>
+                        <p>Controller states information will be displayed here.</p>
+                    </div>
+                    <div id="mecStatus" class="state-box">
+                        <h3>MEC State</h3>
+                        <p>Multi-Access Edge Computing states information will be displayed here.</p>
+                    </div>
+            </div>
+        </div>
+    </div>
+    <div id="support" class="tab">
+        <h2>Support</h2>
+        <p>For any issues, please contact the support team: hdmeng at berkeley dot edu.</p>
+    </div>
+</body>
+</html>
