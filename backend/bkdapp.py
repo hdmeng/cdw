@@ -8,7 +8,7 @@ import time
 import socket
 import sys
 # Add the data-server directory to the Python path
-sys.path.append('data-server')
+sys.path.append('./data-server')
 import mapParse as mpp
 import dataParse as dap
 import subprocess

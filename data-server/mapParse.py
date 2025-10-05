@@ -11,17 +11,40 @@ with open('pkl/j2735_spec.pkl', 'rb') as f:
     j2735_spec = pickle.load(f)
 
 # function to parse the BSM message
-def parse_bsm(bsm_msg):
+def parse_bsm(payload, withMsgFrame=False):
+
+    if withMsgFrame:
+        # Decode the Message Frame payload using the ASN.1 specification
+        decoded = j2735_spec.decode('MessageFrame', payload)
+        bsm_value = decoded.get('value')
+    else:
+        bsm_value = payload    
+    
     # Decode the BSM message using the ASN.1 specification
-    decoded_bsm = j2735_spec.decode('BasicSafetyMessage', bsm_msg)
+    decoded_bsm = j2735_spec.decode('BasicSafetyMessage', bsm_value)
+    bsm_core = decoded_bsm.get('coreData')
 
-    veh_id = 12345 
-    veh_lat = decoded_bsm.get('coreData').get('lat') / 10000000.0   # to degree
-    veh_lon = decoded_bsm.get('coreData').get('long') / 10000000.0  # to degree
-    veh_speed = decoded_bsm.get('coreData').get('speed') 
-    veh_heading = decoded_bsm.get('coreData').get('heading')
+    veh_pos = {}
+    veh_pos['id'] = bsm_core.get('id') 
+    veh_pos['lat'] = bsm_core.get('lat') / 10000000.0   # to degree
+    veh_pos['long'] = bsm_core.get('long') / 10000000.0  # to degree
+    veh_pos['speed'] = bsm_core.get('speed') * 0.02*3600/1609.34  # to mph
+    veh_pos['heading'] = bsm_core.get('heading') * 0.0125  # to degree
 
-    return veh_id, veh_lat, veh_lon, veh_speed, veh_heading
+    return veh_pos
+
+# # function to parse the BSM message
+# def parse_bsm(bsm_msg):
+#     # Decode the BSM message using the ASN.1 specification
+#     decoded_bsm = j2735_spec.decode('BasicSafetyMessage', bsm_msg)
+
+#     veh_id = 12345 
+#     veh_lat = decoded_bsm.get('coreData').get('lat') / 10000000.0   # to degree
+#     veh_long = decoded_bsm.get('coreData').get('long') / 10000000.0  # to degree
+#     veh_speed = decoded_bsm.get('coreData').get('speed') 
+#     veh_heading = decoded_bsm.get('coreData').get('heading')
+
+#     return veh_id, veh_lat, veh_long, veh_speed, veh_heading
 
 # Define a function to convert the Message Frame payload to JSON
 def MessageFrame_payload_to_json(payload):
@@ -54,15 +77,15 @@ def get_intersection_center(intxn):
     # get the reference point
     ref_point = intxn.get('refPoint', {})
     ref_lat = ref_point.get('lat', None)
-    ref_lon = ref_point.get('long', None)
+    ref_long = ref_point.get('long', None)
 
-    if ref_lat is not None and ref_lon is not None:
+    if ref_lat is not None and ref_long is not None:
         # Convert from 1/10 microdegrees to degrees
         ref_lat = ref_lat / 10000000.0
-        ref_lon = ref_lon / 10000000.0
+        ref_long = ref_long / 10000000.0
 
-    #return {'id': ref_id, 'lat': ref_lat, 'lng': ref_lon}
-    return {"lat": ref_lat, "lng": ref_lon}
+    #return {'id': ref_id, 'lat': ref_lat, 'lng': ref_long}
+    return {"lat": ref_lat, "lng": ref_long}    # "lng" is for Google Map
 
 # Define a function to calculate the meter offset between two lat/lon points
 def calc_lat_lon_offset(lon0, lat0, lon1, lat1):
@@ -154,12 +177,21 @@ def get_all_lanes(intxn, format='TUPLE', verbose=False):
 
                     single_lane.append((lat_curr, lon_curr, x_curr, y_curr, delta_curr))
                     single_lane_LL.append({"lat": lat_curr, "lng": lon_curr})
+                elif delta_type.startswith('node-LatLon'):
+                    # delta LatLon in degree
+                    x_curr = 0.0
+                    y_curr = 0.0
+                    delta_curr = 0.0
+                    lat_curr = delta_values.get('lat', 0) / 10000000.0
+                    lon_curr = delta_values.get('lon', 0) / 10000000.0
+                    single_lane.append((lat_curr, lon_curr, x_curr, y_curr, delta_curr))
+                    single_lane_LL.append({"lat": lat_curr, "lng": lon_curr})
                 else:
                     print(f"Unexpected delta type: {delta_type}")  # Debug print for unexpected types
             else:
                 point = delta.get('node-LLmD-64b', {})
                 lat_offset = point.get('lat', 0) / 10000000.0
-                long_offset = point.get('long', 0) / 10000000.0
+                lon_offset = point.get('lon', 0) / 10000000.0
                 #single_lane.append((intxn_ref['lon'] + long_offset, intxn_ref['lat'] + lat_offset))
 
         if verbose:
@@ -207,7 +239,7 @@ def draw_intersection(intxnData, intxn_name, veh_pos, draw_XY=True, draw_LL=Fals
                 ax.plot(lane_points[0], lane_points[1], 'ko-')
 
     if draw_LL:
-        ax.plot(veh_pos['lng'], veh_pos['lat'], 'rx')
+        ax.plot(veh_pos['lon'], veh_pos['lat'], 'rx')
     elif draw_XY:
         ax.plot(veh_pos['X'], veh_pos['Y'], 'rx', label='veh location')
 

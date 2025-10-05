@@ -66,9 +66,9 @@
         const SOCKET_PORT = 5000;
 
         // Connect to the WebSocket server
-        const socket = io(`${SERVER_URL}:${SOCKET_PORT}`, { 
-            secure: false
-        });
+        // const socket = io(`${SERVER_URL}:${SOCKET_PORT}`, { 
+        //    secure: false
+        // });
 
         let mapsScript;
         let mapsScriptLoaded = false;
@@ -146,55 +146,6 @@
                 mapsScript = null;
                 mapsScriptLoaded = false;
             }
-        }
-
-
-        // async function bsmTraj() {
-        //     try {
-
-        //         // Remove the Google Maps API if it was previously loaded
-        //         // await loadGMPsAPI();
-        //         const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
-
-        //         // Create the 3D map using google.maps.Map
-        //         map = new google.maps.Map(document.getElementById("sceneContent"), {
-        //             mapId: "DEMO-MAP-ID" // Replace with your Google Maps Map ID
-        //         });
-        //         // Create the map
-        //         // map = new google.maps.Map(document.getElementById("bsmContent"));
-
-        //         // Fetch initial marker coordinates from the API
-        //         const markersResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/markers`);
-        //         const markers = await markersResponse.json();
-                
-        //         markers[0].lat = 37.915410;
-        //         markers[0].lng = -122.334223;
-        //         // Define the custom icon
-        //         const icon = {
-        //             url: 'img/car-top.png', // Path to your local image
-        //             scaledSize: new google.maps.Size(20, 20), // Scale the image to desired size
-        //         };
-                
-        //         const marker = new AdvancedMarkerElement({
-        //             position: markers[0],
-        //             map: map,
-        //             title: "Vehicle User",
-        //             // icon: icon
-        //         });
-
-        //         // Listen for marker updates
-        //         socket.on('marker_update', (data) => {
-        //             const newPosition = new google.maps.LatLng(data.lat, data.lng);
-        //             marker.setPosition(newPosition);
-        //         });
-        //     } catch (error) {
-        //         console.error('Error initializing map:', error);
-        //     }
-        // }
-
-        function socketOff() {
-            socket.off('marker_update');
-            // socket.disconnect(); // Fully disconnect the socket
         }
 
         async function genIntxnList() {
@@ -365,7 +316,7 @@
                         });
                 }, 1000); // Calls every 1 seconds
             } catch (error) {
-                console.error('Error listening to socket:', error);
+                console.error('Error getting SPAT info:', error);
             }
         }
         
@@ -440,7 +391,7 @@
             // Call the appropriate function based on the tab name
             if (tabName === 'vmap') {
                 // turn off the location update socket
-                socket.off('marker_update');
+                // socket.off('marker_update');
                 
                 await mapValidate();
             } else if (tabName === 'bsm') {
@@ -448,7 +399,7 @@
 
                 await bsmTraj();
             }  else {
-                socket.off('marker_update');
+                // socket.off('marker_update');
                 // socket.off('rsu_state');
             }
         }

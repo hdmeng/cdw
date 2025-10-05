@@ -4,6 +4,7 @@ import socket
 import json
 import pickle
 from tabnanny import verbose
+import argparse  # Import the argparse module
 
 # Load the compiled ASN.1 specification from a file
 with open('./J2735Common/pkl/j2735_spec_2.pkl', 'rb') as f:
@@ -68,21 +69,58 @@ def decode_spat(hex_string, verbose=False):
 
     return phases
 
+# function to parse the BSM message
+def parse_bsm(payload, withMsgFrame=False):
+
+    if withMsgFrame:
+        # Decode the Message Frame payload using the ASN.1 specification
+        decoded = j2735_spec.decode('MessageFrame', payload)
+        bsm_value = decoded.get('value')
+    else:
+        bsm_value = payload    
+    
+    # Decode the BSM message using the ASN.1 specification
+    decoded_bsm = j2735_spec.decode('BasicSafetyMessage', bsm_value)
+    bsm_core = decoded_bsm.get('coreData')
+
+    veh_pos = {}
+    veh_pos['id'] = bsm_core.get('id') 
+    veh_pos['lat'] = bsm_core.get('lat') / 10000000.0   # to degree
+    veh_pos['long'] = bsm_core.get('long') / 10000000.0  # to degree
+    veh_pos['speed'] = bsm_core.get('speed') * 0.02*3600/1609.34  # to mph
+    veh_pos['heading'] = bsm_core.get('heading') * 0.0125  # to degree
+
+    return veh_pos
+
+
 # Visualize as a timeline 
 # print phase 'G' for green, 'R' for red, 'Y' for yellow, in every 10 packets
 
-
 if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser(description='Process MAP payload and draw intersection geometry.')
+    parser.add_argument('-S', '--spat', action='store_true', help='Enable verbose output')
+    parser.add_argument('-B', '--bsm', action='store_true', help='Enable figure plotting')
+    args = parser.parse_args()
+    
     # Create a UDP socket for receiving packets
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(('0.0.0.0', 4520))
 
-    tcnt = 0
-    while True:
-        data, addr = sock.recvfrom(1024)
-        tcnt = (tcnt + 1) % 10
-        if len(data) != 0 and tcnt == 1:
-            json_data = json.loads(data.decode('utf-8'))
-            # print(f"Received data from {addr}: {json_data.get('PSID')}")
+    if args.bsm:
+        with open('/home/path/la_atcmtd/bsmLog.log', 'rb') as f:
+            for line in f:
+                # Parse the BSM message from each line
+                veh_id, veh_lat, veh_lon, veh_speed, veh_heading = parse_bsm(line)
+                print(f"Vehicle ID: {veh_id}, Latitude: {veh_lat}, Longitude: {veh_lon}, Speed: {veh_speed}, Heading: {veh_heading}")
+
+    if args.spat:
+        tcnt = 0
+        while True:
+            data, addr = sock.recvfrom(1024)
+            tcnt = (tcnt + 1) % 10
+            if len(data) != 0 and tcnt == 1:
+                json_data = json.loads(data.decode('utf-8'))
+                # print(f"Received data from {addr}: {json_data.get('PSID')}")
             timing = decode_spat(json_data.get('Payload'), verbose=True)
             
