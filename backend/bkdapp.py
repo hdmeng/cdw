@@ -32,17 +32,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-sio = SocketManager(app=app, cors_allowed_origins="*")
+sio = SocketManager(app=app, cors_allowed_origins="*", mount_location="/ws", socketio_path="socket.io")
 
 # Define the map center coordinates from env
-map_center = {
-    "lat": float(os.getenv('MAP_CENTER_LAT', 34.1054162)),
-    "lng": float(os.getenv('MAP_CENTER_LNG', -118.2918061))
-}
+# map_center = {
+#     "lat": float(os.getenv('MAP_CENTER_LAT', 34.1054162)),
+#     "lng": float(os.getenv('MAP_CENTER_LNG', -118.2918061))
+# }
 
 # Define the markers coordinates
 markers = [
-    {"lat": 34.105423, "lng": -118.291189}
+    # {"lat": 34.105423, "lng": -118.291189},  # another place @ Hollywood
+    {"lat": 34.094408, "lng": -118.330568},  # Cole PI @ Hollywood
+    {"lat": 37.439616, "lng": -122.162708},  # Medical @ ECR
+    {"lat": 37.915572, "lng": -122.334873},  # COIN @ RFS
     # Add more coordinates here
 ]
 
@@ -53,12 +56,24 @@ async def get_api_key():
 
 # Serve the map center coordinates
 @app.get('/api/map_center')
-async def get_map_center():
+async def get_map_center(site: str):
+    if site == 'HLWD':
+        # Read the MAP payload from the file
+        map_center = markers[0]
+    elif site == 'ECR':
+        map_center = markers[1]
+        #map_center = {"lat": float(os.getenv('MAP_CENTER_LAT', 37.439616)),
+        #             "lng": float(os.getenv('MAP_CENTER_LNG', -122.162708))}
+    elif site == 'RFS':
+        map_center = markers[2]
+    else:
+        return JSONResponse({"error": "Invalid site parameter"}, status_code=400)
+
     return JSONResponse(map_center)
 
 @app.get('/api/markers')
 async def get_markers():
-    return JSONResponse(markers)
+    return JSONResponse(markers[0])
 
 # set the intersection list, having name and center for each intersection
 intxn_list = []
@@ -217,23 +232,43 @@ async def get_msg_stats():
 
 
 # Update markers based on incoming UDP messages
-async def marker_update_task():
+async def bsm_update_task():
+    #loop = asyncio.get_running_loop()
     # Create a UDP socket for listening
     listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    LISTEN_PORT = int(os.getenv('MARKER_LISTEN_PORT', 17001))
+    LISTEN_PORT = int(os.getenv('BSM_LISTEN_PORT', 17001))
     listen_socket.bind(('', LISTEN_PORT))
+    listen_socket.setblocking(False)  # Important for async operation
 
+    message = None
     while not should_stop.is_set():
         try:
-            message, address = listen_socket.recvfrom(1024)  # Buffer size is 1024 bytes
+            # Use asyncio to handle non-blocking socket operations
+            # message, address = await asyncio.get_event_loop().run_in_executor(None, listen_socket.recvfrom, 1024)
+            try:
+                message, address = listen_socket.recvfrom(1024)
+            except BlockingIOError:
+                await asyncio.sleep(0.01)  # Small delay to prevent CPU spinning
+                continue
             veh_pos = {}
-            veh_pos['id'], markers[0]['lat'], markers[0]['lng'], veh_speed, veh_heading = mpp.parse_bsm(message)
-            await sio.emit('marker_update', markers[0])
+            #veh_pos['id'], markers[0]['lat'], markers[0]['lng'], veh_speed, veh_heading = mpp.parse_bsm(message)
+            #if not message:
+            #    continue
+            try:
+                veh_pos = mpp.parse_bsm(message, withMsgFrame=True)
+            except Exception as e:
+                print(f"Error parsing BSM: {e}")
+                continue
+
+            # Emit the updated vehicle position to all connected clients
+            if len(veh_pos) > 0:
+                print(f"veh: {veh_pos['id']}", end=' ')
+                await sio.emit('veh_update', veh_pos)
         except socket.timeout:
             # This is expected, just continue the loop
             continue
         except Exception as e:
-            print(f"Error in marker update: {e}")
+            print(f"Error in vehicle update: {e}")
 
     # Clean up resources
     listen_socket.close()
@@ -255,7 +290,7 @@ async def startup_event():
     # Start SPaT update task in background
     threading.Thread(target=spat_update, daemon=True).start()
     # Uncomment if you want to start marker update task
-    # asyncio.create_task(marker_update_task())
+    asyncio.create_task(bsm_update_task())
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -276,7 +311,7 @@ if __name__ == '__main__':
         try:
             logging.info(f"Starting the FastAPI server on {host}:{port}...")
             
-            # Run the server
+            # Run the server for http and websocket
             uvicorn.run(
                 app,
                 host=host,

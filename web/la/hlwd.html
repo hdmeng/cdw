@@ -3,8 +3,9 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>intxn V2X Applications Demo</title>
-    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <title>V2X Transit Signal Priority Demo</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="../js/common.js"></script>
     <style>
         .tab {
             display: none;
@@ -40,71 +41,26 @@
         } 
     </style>
     <script>
-        const SERVER_URL = 'https://128.32.129.118'; // 'https://127.0.0.1'; 
-        //// 'http://128.32.129.118';
-        const SERVER_PORT = 5000;
-        const SOCKET_PORT = 5000;
 
-        // Connect to the WebSocket server
-        const socket = io(`${SERVER_URL}:${SOCKET_PORT}`, { 
-            secure: true,
-            rejectUnauthorized: false
+        const socket = io(`ws://128.32.129.118:5000`, {
+            path: "/ws/socket.io",
+            transports: ['websocket'],
+            reconnection: true,
+            reconnectionAttempts: 5,
+            reconnectionDelay: 1000
         });
 
-        let mapsScript;
-        let mapsScriptLoaded = false;
-        let map;
-        let vmap_notloaded = true;
+        socket.on('connect', () => {
+            console.log('Socket connected successfully');
+        });
 
-        /*
-        function loadConfig(file) {
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    const config = JSON.parse(event.target.result);
-                    SERVER_URL = config.server_url;
-                    SERVER_PORT = config.server_port;
-                    SOCKET_PORT = config.socket_port;
-                    resolve();
-                };
-                reader.onerror = reject;
-                reader.readAsText(file);
-            });
-        }
-        */
+        socket.on('connect_error', (error) => {
+            console.error('Socket connection error:', error);
+        });
 
-        // Load the Google Maps JavaScript API
-        async function loadGoogleMapsAPI() {
-            if (mapsScriptLoaded) {
-                return Promise.resolve();
-            }
-
-            // Fetch the API key from the server
-            const apiKeyResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/key`);
-            const apiKeyData = await apiKeyResponse.json();
-            const apiKey = apiKeyData.api_key;
-
-            return new Promise((resolve, reject) => {
-                mapsScript = document.createElement('script');
-                mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`; 
-                mapsScript.async = true;
-                mapsScript.defer = true;
-                mapsScript.onload = () => {
-                    mapsScriptLoaded = true;
-                    resolve();
-                };
-                mapsScript.onerror = reject;
-                document.head.appendChild(mapsScript);
-            });
-        }
-
-        function removeGoogleMapsAPI() {
-            if (mapsScript) {
-                document.head.removeChild(mapsScript);
-                mapsScript = null;
-                mapsScriptLoaded = false;
-            }
-        }
+        socket.on('disconnect', () => {
+            console.log('Socket disconnected');
+        });
 
         async function bsmTraj() {
             try {
@@ -116,28 +72,28 @@
                 await loadGoogleMapsAPI();
 
                 // Fetch map center coordinates from the API
-                const mapCenterResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/map_center`);
-                const mapCenter = await mapCenterResponse.json();
+                // const mapCenterResponse = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/map_center?site=HLWD`);
+                // const mapCenter = await mapCenterResponse.json();
 
                 // Create the map
                 map = new google.maps.Map(document.getElementById("bsmContent"), {
                     zoom: 19,
-                    center: mapCenter,
+                    center: {lat: 34.094408, lng: -118.330568},
                     mapTypeId: 'satellite'
                 });
 
                 // Fetch initial marker coordinates from the API
-                const markersResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/markers`);
+                const markersResponse = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/markers`);
                 const markers = await markersResponse.json();
                 
                 // Define the custom icon
                 const icon = {
-                    url: 'img/car-top.png', // Path to your local image
+                    url: './img/car-top.png', // Path to your local image
                     scaledSize: new google.maps.Size(20, 20), // Scale the image to desired size
                 };
                 
                 const marker = new google.maps.Marker({
-                    position: markers[0],
+                    position: markers,
                     map: map,
                     title: "Vehicle User",
                     icon: icon
@@ -146,140 +102,20 @@
                 // // Connect to the WebSocket server
                 // const socket = io(`${SERVER_URL}:${SOCKET_PORT}`);
 
-                // Listen for marker updates
-                socket.on('marker_update', (data) => {
-                    const newPosition = new google.maps.LatLng(data.lat, data.lng);
-                    marker.setPosition(newPosition);
+                // Listen for vehicle updates
+                socket.on('veh_update', (data) => {
+                   console.log(data) 
+                   const newPosition = new google.maps.LatLng(data.lat, data.lng);
+                   marker.setPosition(newPosition);
                 });
             } catch (error) {
                 console.error('Error initializing map:', error);
             }
         }
 
-        function socketOff() {
-            socket.off('marker_update');
-        }
-
-        async function genIntxnList() {
-            try {
-                const site = 'HLWD'; // or 'ECR', depending on the desired site
-                const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/intxn_list?site=${site}`);
-                const intxns = await response.json();
-                if (vmap_notloaded) {
-                    populateSidebar(intxns);
-                }
-                // set the tab notloaded flag to false
-                vmap_notloaded = false;
-             } catch (error) {
-            console.error('Error fetching intersection list:', error);
-            }
-        }
-
-        let lastListItem = null;
-        let lastMarker = null;
-
-        async function populateSidebar(intxns) {
-            const intxnList = document.getElementById('intxnList');
-            intxns.forEach(intxn => {
-                const listItem = document.createElement('li');
-                listItem.textContent = intxn.name;
-                listItem.addEventListener('click', () => {
-                    // set the map center to the selected intersection
-                    map.setCenter(intxn.center);
-                    map.setZoom(19);
-                    
-                    // Add intersection name text at the map center using Marker
-                    if (lastMarker) {
-                        lastMarker.setMap(null); // Remove the previous marker
-                    }
-                    const marker = new google.maps.Marker({
-                        position: intxn.center,
-                        map: map,
-                        label: {
-                            text: intxn.name,
-                            color: 'white',
-                            fontSize: '15px',
-                            fontWeight: 'bold'
-                        },
-                        // icon: svgMarker
-                        
-                    });
-                    lastMarker = marker;
-
-                    // add lanes to the map
-                    addLanes(intxn.name);
-
-                    // change the text color back of the last selected item
-                    if (lastListItem) {
-                        lastListItem.style.color = 'white';
-                    }
-                    // change the text color of the selected item
-                    listItem.style.color = 'red';
-                    lastListItem = listItem;
-                });
-                intxnList.appendChild(listItem);
-            });
-        }
-
-        const lineColor = {
-            64: 'green',    // egress 
-            128:'blue',    // ingress
-            192: 'orange' // bi-directional
-        };
-
-        async function addLanes(selIntxnName) {
-            try {
-                // add lane lines
-                const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/intxn_lanes`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ name: selIntxnName})
-                });
-
-                const laneLines = await response.json();
-                laneLines.forEach(laneLine => {
-                    const line = new google.maps.Polyline({
-                        path: laneLine.points.map(coord => new google.maps.LatLng(coord.lat, coord.lng)),
-                        geodesic: true,
-                        strokeColor: lineColor[laneLine.dir] || 'red',
-                        strokeOpacity: 0.8,
-                        strokeWeight: 2
-                    });
-                    line.setMap(map);
-                });
-            } catch (error) {
-                console.error('Error obtaining lanes:', error);
-            }    
-
-        }
-
-        async function mapValidate() {
-            try {
-                // Load the Google Maps API with the fetched API key
-                await loadGoogleMapsAPI();
-                
-                // Fetch map center coordinates from the API
-                const mapCenterResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/map_center`);
-                const mapCenter = await mapCenterResponse.json();
-                
-                // Create the map
-                map = new google.maps.Map(document.getElementById("vmapContent"), {
-                    zoom: 19,
-                    center: mapCenter,
-                    mapTypeId: 'satellite'
-                });
-
-                genIntxnList();
-    
-            } catch (error) {
-                console.error('Error initializing map:', error);
-            }
-        }
-
+        
         // Open the specified tab
-        function openTab(event, tabName) {
+        async function openTab(event, tabName) {
             const tabs = document.querySelectorAll('.tab');
             tabs.forEach(tab => tab.classList.remove('active'));
 
@@ -293,13 +129,13 @@
 
             // Call the appropriate function based on the tab name
             if (tabName === 'vmap') {
-                socketOff();
-                
-                mapValidate();
+                socket.off('veh_update');
+
+                await mapValidate('HLWD');
             } else if (tabName === 'bsm') {
-                bsmTraj();
+                await bsmTraj();
             }  else {
-                socketOff();
+                socket.off('veh_update');
             }
         }
 
@@ -308,7 +144,7 @@
             // load Google Maps JavaScript API
             // loadGoogleMapsAPI();
 
-            openTab(null, 'bsm');
+            openTab(null, 'vmap');
         }
     </script>
 </head>
