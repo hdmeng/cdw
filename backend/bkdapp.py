@@ -32,7 +32,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-sio = SocketManager(app=app, cors_allowed_origins="*", mount_location="/ws", socketio_path="socket.io")
+#sio = SocketManager(app=app, cors_allowed_origins="*", mount_location="/ws", socketio_path="socket.io")
+#sio = SocketManager(app=app, cors_allowed_origins="*")
+sio = SocketManager(app=app, cors_allowed_origins="http://128.32.129.118:5000")
 
 # Define the map center coordinates from env
 # map_center = {
@@ -156,11 +158,12 @@ should_stop = threading.Event()
 # Global variable to hold SPaT timings
 spat_phases = []
 
-# get Controller state, e.g. /api/tsc_state?rsnode=ecr-pgml
+# get Controller state based on SPaT updates, e.g. /api/tsc_state?rsnode=ecr-pgml
 @app.get('/api/tsc_state')
 async def get_controller_state(rsnode: str):
     global spat_phases
-    sig_state = ['R','R','R','R','R','R','R','R','R','R','R','R','R','R','R','R','R']  # Default signal states
+    sig_state = ['R','R','R','R','R','R','R','R'
+            ,'R','R','R','R','R','R','R','R','R']  # Default signal states
     for phase in spat_phases:
         # print(f"SPaT Phase: {phase}")
         sig_state[phase['signalGroup']] = phase['eventState'] 
@@ -230,9 +233,40 @@ async def get_msg_stats():
     ]
     return JSONResponse(msg_stats)
 
+# get detector loop positions for the given intersections
+@app.get('/api/intxn_loops')
+async def get_detector_loop_positions(site: str):
+    # retrieve detector loop positions
+    # loop_positions = [
+    #     {"id": "501A", "position": "B1", "lat": 34.094381, "lng": -118.330265},
+    #     {"id": "503R", "position": "B2", "lat": 34.094372, "lng": -118.331398},
+    #     {"id": "503A", "position": "B3", "LatLng": {"lat": 34.094320, "lng": -118.331854}},
+    #     {"id": "504R", "position": "B4", "LatLng": {"lat": 34.094328, "lng": -118.330512}}
+    # ]
+    if site == 'HLWD':
+        # Read the MAP payload from the file
+        detc_file = 'maps/Fountain-Ave-Detectors.csv'   
+    else:
+        return JSONResponse({"error": "Invalid site parameter"}, status_code=400)
+
+    loop_positions = mpp.get_detector_pos(detc_file)
+
+    return JSONResponse(loop_positions)
+
+
+# get vehicle locations based on BSM updates, e.g. /api/veh_loc?vehid=02405
+@app.get('/api/veh_loc')
+async def get_vehicle_location(vehid: int):
+    global fleet_pos
+    # Just return the last known vehicle position for the given ID
+    if vehid in fleet_pos:
+        return JSONResponse(fleet_pos[vehid])
+    else:
+        return JSONResponse({"error": "Vehicle not found"}, status_code=404)
+
 
 # Update markers based on incoming UDP messages
-async def bsm_update_task():
+async def bsm_update_task(BSM_RAW=False):
     #loop = asyncio.get_running_loop()
     # Create a UDP socket for listening
     listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -240,30 +274,43 @@ async def bsm_update_task():
     listen_socket.bind(('', LISTEN_PORT))
     listen_socket.setblocking(False)  # Important for async operation
 
+    global fleet_pos
+    fleet_pos = {}  # Dictionary to hold positions of all vehicles
     message = None
     while not should_stop.is_set():
         try:
             # Use asyncio to handle non-blocking socket operations
-            # message, address = await asyncio.get_event_loop().run_in_executor(None, listen_socket.recvfrom, 1024)
             try:
                 message, address = listen_socket.recvfrom(1024)
             except BlockingIOError:
                 await asyncio.sleep(0.01)  # Small delay to prevent CPU spinning
                 continue
             veh_pos = {}
-            #veh_pos['id'], markers[0]['lat'], markers[0]['lng'], veh_speed, veh_heading = mpp.parse_bsm(message)
-            #if not message:
-            #    continue
+            
             try:
-                veh_pos = mpp.parse_bsm(message, withMsgFrame=True)
+                if BSM_RAW:
+                    # parse J2735 raw BSM message
+                    veh_pos = mpp.parse_bsm(message, withMsgFrame=True)
+                else:
+                    # parse processing result message in Tuple format
+                    # sending message: str(veh_pos).encode('utf-8')
+                    veh_pos = eval(message.decode('utf-8'))
+                    # print(f"{veh_pos['id']}", end="", flush=True)
+
             except Exception as e:
-                print(f"Error parsing BSM: {e}")
+                # print(f"Error parsing BSM: {e}")
                 continue
 
             # Emit the updated vehicle position to all connected clients
             if len(veh_pos) > 0:
-                print(f"veh: {veh_pos['id']}", end=' ')
-                await sio.emit('veh_update', veh_pos)
+                # convert the vehicle ID hex to an integer for indexing
+                # tmpid = int(veh_pos['id'][2:4].hex(), 16)
+                tmpid = veh_pos['id']
+                # print(f"veh: {tmpid}", end=' ')
+                # update fleet_pos for the vehicle ID in the message
+                # having all the vehicle attributes in fleet_pos
+                fleet_pos[tmpid] = veh_pos
+                # await sio.emit('veh_update', veh_pos)
         except socket.timeout:
             # This is expected, just continue the loop
             continue

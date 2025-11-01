@@ -26,10 +26,16 @@ def parse_bsm(payload, withMsgFrame=False):
 
     veh_pos = {}
     veh_pos['id'] = bsm_core.get('id') 
+    veh_pos['msgCnt'] = bsm_core.get('msgCnt')
+    veh_pos['secMark'] = bsm_core.get('secMark') / 1000.0  # to second
     veh_pos['lat'] = bsm_core.get('lat') / 10000000.0   # to degree
     veh_pos['long'] = bsm_core.get('long') / 10000000.0  # to degree
     veh_pos['speed'] = bsm_core.get('speed') * 0.02*3600/1609.34  # to mph
     veh_pos['heading'] = bsm_core.get('heading') * 0.0125  # to degree
+
+    # format speed to one decimal place
+    veh_pos['speed'] = float(f"{veh_pos['speed']:.1f}")
+    veh_pos['heading'] = float(f"{veh_pos['heading']:.1f}")
 
     return veh_pos
 
@@ -241,7 +247,7 @@ def draw_intersection(intxnData, intxn_name, veh_pos, draw_XY=True, draw_LL=Fals
     if draw_LL:
         ax.plot(veh_pos['lon'], veh_pos['lat'], 'rx')
     elif draw_XY:
-        ax.plot(veh_pos['X'], veh_pos['Y'], 'rx', label='veh location')
+        ax.plot(veh_pos['iX'], veh_pos['iY'], 'rx', label='veh location')
 
     ax.legend()
     plt.show()
@@ -276,6 +282,39 @@ def read_mapsHex_from_file(file_path):
                 maps_hex[intxn_name] = bytes.fromhex(hex_string)
                 
     return maps_hex
+
+# the detector file format:
+# DetNo	Dir	Type	Lat		Long		IntxnName     TPSCtrlNo   IntxnID
+# 1	W/B	Advance	34.09537	-118.32234	GowerSt&FountainAv      53  3-192
+def get_detector_pos(detector_file, intxn_id='all'):
+    detectors = []
+    with open(detector_file, 'r') as f:
+        lines = f.readlines()
+        for line in lines[1:]:  # Skip header line
+            parts = line.strip().split('\t')
+            #if len(parts) > 8:
+            #    continue
+
+            det = {
+                'detNo': parts[0],
+                'dir': parts[1],
+                'lanes': [int(lane) for lane in parts[2].strip().split('-')],
+                'type': parts[3],
+                'lat': float(parts[4]), 
+                'long': float(parts[5]),
+                'intxnName': parts[6],
+                'TPSCtrlNo': parts[7] if len(parts) > 7 else None,
+                'intxnID': parts[8] if len(parts) > 8 else None,
+                'dist2intxn': float(parts[9]) if len(parts) > 9 else None,
+                'dist2stop': float(parts[10]) if len(parts) > 10 else None
+            }
+
+            # 
+            if intxn_id == 'all' or det['intxnID'] == intxn_id:
+                detectors.append(det)
+
+    return detectors
+
 
 if __name__ == "__main__":
     maps_hex = read_mapsHex_from_file('conf/payload/LA-Hollywood-55-hgt.payload')

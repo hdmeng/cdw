@@ -3,7 +3,8 @@
 const cv2x = {
     // Private configuration
     _config: {
-        SVR_URL: 'http://128.32.129.118',
+        SVR_URL: 'http://128.32.129.118:5000',
+        SVR_IP: '128.32.129.118',
         SVR_PORT: '5000'
     },
 
@@ -28,13 +29,13 @@ async function loadGoogleMapsAPI() {
     }
 
     // Fetch the API key from the server
-    const apiKeyResponse = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/key`);
+    const apiKeyResponse = await fetch(`${cv2x._config.SVR_URL}/api/key`);
     const apiKeyData = await apiKeyResponse.json();
     const apiKey = apiKeyData.api_key;
 
     return new Promise((resolve, reject) => {
         mapsScript = document.createElement('script');
-        mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=loadGoogleMapsAPI`; 
+        mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=loadGoogleMapsAPI&libraries=marker`; 
         mapsScript.async = true;
         mapsScript.defer = true;
         mapsScript.onload = () => {
@@ -63,7 +64,7 @@ async function bsmTraj() {
         });
 
         // Fetch initial marker coordinates from the API
-        const markersResponse = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/markers`);
+        const markersResponse = await fetch(`${cv2x._config.SVR_URL}/api/markers`);
         const markers = await markersResponse.json();
         
         // Define the custom icon
@@ -91,7 +92,7 @@ async function mapValidate(site) {
         await loadGoogleMapsAPI();
             
         // Fetch map center coordinates from the API
-        const mapCenterResponse = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/map_center?site=${site}`);
+        const mapCenterResponse = await fetch(`${cv2x._config.SVR_URL}/api/map_center?site=${site}`);
         const mapCenter = await mapCenterResponse.json();
         
         // Create the map
@@ -111,8 +112,9 @@ async function mapValidate(site) {
 async function genIntxnList(site) {
     try {
         // const site = 'ECR'; // or 'ECR', depending on the desired site
-        const response = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/intxn_list?site=${site}`);
+        const response = await fetch(`${cv2x._config.SVR_URL}/api/intxn_list?site=${site}`);
         const intxns = await response.json();
+        
         if (cv2x.vmap_notloaded) {
             populateSidebar(intxns);
         }
@@ -168,7 +170,7 @@ async function populateSidebar(intxns) {
 async function addLanes(selIntxnName) {
     try {
         // add lane lines
-        const response = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/intxn_lanes`, {
+        const response = await fetch(`${cv2x._config.SVR_URL}/api/intxn_lanes`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -186,20 +188,59 @@ async function addLanes(selIntxnName) {
             });
             line.setMap(cv2x.map);
 
-            new google.maps.Marker({
-                position: laneLine.points[0],
+            // add lane ID text at the start of the lane line using Marker
+            // no marker icon is needed
+            const startPoint = line.getPath().getAt(0);
+            const svgMarker = {
+                // use anything invisible as the marker icon
+                path: google.maps.SymbolPath.CIRCLE,
+                scale: 0
+            };
+            const marker = new google.maps.Marker({
+                position: startPoint,
                 map: cv2x.map,
                 label: {
-                    text: laneLine.id.toString(),
+                    text: (`${laneLine.id}`),
                     color: 'white',
                     fontSize: '11px',
                     fontWeight: 'bold'
                 },
-                icon: {
-                    path: google.maps.SymbolPath.CIRCLE,
-                    scale: 0 // Set scale to 0 to hide the icon
-                }
+                icon: svgMarker
+
             });
+        });
+    } catch (error) {
+        console.error('Error obtaining lanes:', error);
+    }    
+}
+
+function getLoopBorder(llat, llng) {
+    const offset = 0.00002; // Approx. 2 meters, adjust as needed
+    return [
+        { lat: llat + offset, lng: llng - offset },
+        { lat: llat + offset, lng: llng + offset },
+        { lat: llat - offset, lng: llng + offset },
+        { lat: llat - offset, lng: llng - offset },
+        { lat: llat + offset, lng: llng - offset } // Close the loop
+    ];
+}
+
+// add loop lines to the map
+async function addLoops(site, baseMap) {
+    try {
+        // add lane lines
+        const response = await fetch(`${cv2x._config.SVR_URL}/api/intxn_loops?site=${site}`);
+        const loopDetecs = await response.json();
+        loopDetecs.forEach(loopDetec => {
+            const loopBorder = getLoopBorder(loopDetec.lat, loopDetec.long)
+            const line = new google.maps.Polyline({
+                path: loopBorder.map(coord => new google.maps.LatLng(coord.lat, coord.lng)),
+                geodesic: true,
+                strokeColor: 'red',
+                strokeOpacity: 0.8,
+                strokeWeight: 2
+            });
+            line.setMap(baseMap);
         });
     } catch (error) {
         console.error('Error obtaining lanes:', error);
