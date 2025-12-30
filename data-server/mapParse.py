@@ -7,7 +7,7 @@ import math
 import pickle
 
 # Load the compiled ASN.1 specification from a file
-with open('pkl/j2735_spec.pkl', 'rb') as f:
+with open('J2735Common/pkl/j2735_spec_2024.pkl', 'rb') as f:
     j2735_spec = pickle.load(f)
 
 # function to parse the BSM message
@@ -52,24 +52,49 @@ def parse_bsm(payload, withMsgFrame=False):
 
 #     return veh_id, veh_lat, veh_long, veh_speed, veh_heading
 
+def make_serializable(obj):
+    if isinstance(obj, dict):
+        return {k: make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [make_serializable(v) for v in obj]
+    if isinstance(obj, tuple):
+        # handle (bytes, n) or generic tuple
+        if len(obj) == 2 and isinstance(obj[0], (bytes, bytearray)) and isinstance(obj[1], int):
+            b = bytes(obj[0])
+            return {
+                "type": "bitfield",
+                "hex": b.hex(),
+                "bits": obj[1],
+                "int": int.from_bytes(b, "big"),
+                # "b64": base64.b64encode(b).decode()
+            }
+        return [make_serializable(v) for v in obj]
+    if isinstance(obj, (bytes, bytearray)):
+        b = bytes(obj)
+        return {"type": "bytes", "hex": b.hex(), "int": int.from_bytes(b, "big")}
+    return obj
+
 # Define a function to convert the Message Frame payload to JSON
 def MessageFrame_payload_to_json(payload):
     # Decode the Message Frame payload using the ASN.1 specification
-    decoded = j2735_spec.decode('MessageFrame', payload)
-    value_decoded = decoded.get('value')
+    decoded = j2735_spec.decode("MessageFrame", payload)
+    value_decoded = decoded.get("value")
 
     # Decode the nested value field if it's still encoded
     if isinstance(value_decoded, bytes):
-        MapData_json = j2735_spec.decode('MapData', value_decoded)
+        MapData_json = j2735_spec.decode("MapData", value_decoded)
     else: 
         MapData_json = value_decoded
 
+    # Convert to a JSON-serializable format
+    MapData_json = make_serializable(MapData_json)
+    
     # Extract the msgIssueRevision and layerType
-    msg_issue_revision = MapData_json.get('msgIssueRevision', None)
-    layer_type = MapData_json.get('layerType', None)
+    msg_issue_revision = MapData_json.get("msgIssueRevision", None)
+    layer_type = MapData_json.get("layerType", None)
 
     # Extract the intersections
-    intxns = MapData_json.get('intersections', [])
+    intxns = MapData_json.get("intersections", [])
     if not intxns:
         return None
     intxnData = intxns[0]
@@ -79,11 +104,11 @@ def MessageFrame_payload_to_json(payload):
 # Define a function to get the intersection center
 def get_intersection_center(intxn):
     
-    ref_id = intxn.get('id', {}).get('id', None)
+    ref_id = intxn.get("id", {}).get("id", None)
     # get the reference point
-    ref_point = intxn.get('refPoint', {})
-    ref_lat = ref_point.get('lat', None)
-    ref_long = ref_point.get('long', None)
+    ref_point = intxn.get("refPoint", {})
+    ref_lat = ref_point.get("lat", None)
+    ref_long = ref_point.get("long", None)
 
     if ref_lat is not None and ref_long is not None:
         # Convert from 1/10 microdegrees to degrees

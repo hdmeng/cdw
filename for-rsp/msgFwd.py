@@ -4,6 +4,7 @@ import subprocess
 import time
 import logging
 import json
+import argparse
 
 # set socket for receiving udp packets
 import socket   
@@ -86,11 +87,14 @@ def parse_ifm(buf, size=None):
     ifm = {
         'PSID': '',
         'TxChannel': '',
-        'Payload': ''
+        'Payload': '',
+        'Spat1_mess': '',
     }
 
     # Parse the data string into the IFM structure
     for line in data_str.split('\n'):
+        if '=' not in line:
+            continue
         key, value = line.split('=', 1)
         if key in ifm:
             ifm[key] = value.strip()
@@ -99,16 +103,23 @@ def parse_ifm(buf, size=None):
 
 # function to receive udp packets from process spat.cpp
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='message forwarding to RSU and Server')
+    parser.add_argument('-l', '--listenPort', type=int, help='Specify the port number', default=15005)
+    parser.add_argument('-p', '--sendPort', type=int, help='Specify the port number', default=15009)
+    parser.add_argument('-R', '--rsuConnect', action='store_true', help='RSU connection flag')
+    args = parser.parse_args()
+
     # Create a UDP socket for receiving packets
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('0.0.0.0', 15005))
+    sock.bind(('0.0.0.0', args.listenPort))
     # create a UDP socket for sending packets
     sock_to_server = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock_to_server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
-    stop_ifm()
+    if args.rsuConnect:
+        stop_ifm()
 
     try:
         # receive udp packets from the socket
@@ -117,14 +128,15 @@ if __name__ == '__main__':
         
         logging.info("Starting to receive UDP packets...")
 
-        if len(data) != 0:
-            # get IFM data from IEEE 1609.2 format
-            msgDict = parse_ifm(data)
-            # print(f"Received data from {addr}: {msgPayload['PSID']}")
-            start_ifm(msgDict['Payload'])
-        else:
-            mockPayload = b'001300010001000100010001000100'  # Example payload, replace with actual data
-            start_ifm(mockPayload)
+        if args.rsuConnect: 
+            if len(data) != 0:
+                # get IFM data from IEEE 1609.2 format
+                msgDict = parse_ifm(data)
+                # print(f"Received data from {addr}: {msgPayload['PSID']}")
+                start_ifm(msgDict['Payload'])
+            else:
+                mockPayload = b'001300010001000100010001000100'  # Example payload, replace with actual data
+                start_ifm(mockPayload)
     except Exception as e:
         logging.error(f"Error creating UDP socket: {e}")
 
@@ -135,13 +147,15 @@ if __name__ == '__main__':
             sock.settimeout(None)  # Blocking mode, will wait indefinitely for packets
 
             data, addr = sock.recvfrom(1024)
+            print(f"packet size: {len(data)}")
             if len(data) != 0:
                 # get IFM data from IEEE 1609.2 format
                 msgDict = parse_ifm(data)
-                # print(f"Received data from {addr}: {msgPayload['PSID']}")
-                send_ifm(msgDict['Payload'])
+                print(f"Received data from {addr}: {msgDict['PSID']}")
+                if args.rsuConnect:
+                    send_ifm(msgDict['Payload'])
                 # send the IFM to the server
-                sock_to_server.sendto(json.dumps(msgDict).encode(), ('192.168.0.162', 15009))
+                sock_to_server.sendto(json.dumps(msgDict).encode(), ('192.168.0.162', args.sendPort))
 
         except Exception as e:
             logging.error(f"Error receiving UDP packets: {e}")

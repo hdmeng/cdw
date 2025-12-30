@@ -7,35 +7,66 @@ from tabnanny import verbose
 import argparse  # Import the argparse module
 
 # Load the compiled ASN.1 specification from a file
-with open('./J2735Common/pkl/j2735_spec_2.pkl', 'rb') as f:
+with open('./J2735Common/j2735_spec_2.pkl', 'rb') as f:
     j2735_spec = pickle.load(f)
 
+# color mapping for signal states
 SigColor = {
     'protected-Movement-Allowed': 'Green',
     'stop-And-Remain': 'Red',
     'protected-clearance': 'Yellow',
-    'permissive-Movement-Allowed': 'LightGreen'}
+    'permissive-Movement-Allowed': 'Blue'}
 
-ColorMap = {'Green': '\033[92m', 'Red': '\033[91m', 'Yellow': '\033[93m', 'LightGreen': '\033[94m'}
+ColorMap = {'Green': '\033[92m', 'Red': '\033[91m', 'Yellow': '\033[93m', 'Blue': '\033[94m'}
 ColorReset = '\033[0m'
-            
+
+# interval meanings for each code
+# 0x00 = WALK 
+IntvlText = {
+    0x00: 'WALK',
+    0x01: 'DONT WALK',
+    0x02: 'MIN GREEN',
+    0x03: 'BIKE GREEN',
+    0x04: 'ADDED INIT',
+    0x05: 'PASSAGE',
+    0x06: 'GREEN REST',
+    0x07: 'REDUCE GAP',
+    0x08: 'RED REST',
+    0x09: 'EXTENSION',
+    0x0A: 'RED HOLD',
+    0x0B: 'RED REVERT',
+    0x0C: 'YELLOW GAP',
+    0x0D: 'YELLOW MAX',
+    0x0E: 'YELLOW F/O',
+    0x0F: 'ALL-RED',
+    0x10: 'GUAR PASS',
+    0x11: 'GUAR PASS',
+    0x12: 'GREEN HOLD',
+    0x13: 'WALK REST',
+    0x14: 'WALK HOLD',
+    0x15: 'DELAY WALK',
+    0x16: 'EARLY WALK'
+}
+
 def parse_ifm(data):
 
     payloadHex = data.get('Payload', '')
     return payloadHex
 
 # Example: decode a UPER-encoded SPaT hex string
-def decode_spat(hex_string, verbose=False):
+def decode_spat(hex_str, intvl_str, verbose=False):
     
     # Convert hex string to bytes
-    byte_data = bytes.fromhex(hex_string)
+    byte_data = bytes.fromhex(hex_str)
     
     # Decode the SPaT message
     msgFrame_data = j2735_spec.decode('MessageFrame', byte_data)
 
     spat_data = j2735_spec.decode('SPAT', msgFrame_data.get('value'))
 
-    # print(f"Decoded SPAT data: {spat_data}")
+    # get interval meanings from intvl_str: 10001000;1,1
+    intvl_codes = intvl_str.split(';')[1].split(',')
+    intvl_strs = [IntvlText.get(int(code), 'UNKNOWN') for code in intvl_codes]
 
     # Extract timing for each signal group
     phases = []
@@ -55,8 +86,9 @@ def decode_spat(hex_string, verbose=False):
             # phases[movement['signalGroup']] = SigColor.get(movement['state-time-speed'][0]['eventState'])
 
         if verbose:
-            secondLine = int(intersection.get('timeStamp') / 1000.0)
-            print(f"{secondLine}", end='  ')
+            minMark = int((intersection.get('moy') % 1440) % 60)
+            secMark = int(intersection.get('timeStamp') / 1000.0)
+            print(f"{minMark}:{secMark}", end='  ')
 
         for phase in phases:
             # Print the signal state without a line break
@@ -64,8 +96,10 @@ def decode_spat(hex_string, verbose=False):
 
             if verbose :
                 print(f"{color}{phase['signalGroup']}{ColorReset}", end=' ')
+                
         if verbose :
-            print('')  # New line 
+            print(f"{intvl_str.split(';')[0]}; {intvl_strs[0]}, {intvl_strs[1]}" , end='\n')
+            #print('')  # New line 
 
     return phases
 
@@ -101,11 +135,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process MAP payload and draw intersection geometry.')
     parser.add_argument('-S', '--spat', action='store_true', help='Enable verbose output')
     parser.add_argument('-B', '--bsm', action='store_true', help='Enable figure plotting')
+    parser.add_argument('-l', '--listenPort', type=int, help='Specify the port number', default=15003)
+
     args = parser.parse_args()
     
     # Create a UDP socket for receiving packets
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('0.0.0.0', 4520))
+    sock.bind(('0.0.0.0', args.listenPort))
 
     if args.bsm:
         with open('/home/path/la_atcmtd/bsmLog.log', 'rb') as f:
@@ -122,5 +158,5 @@ if __name__ == '__main__':
             if len(data) != 0 and tcnt == 1:
                 json_data = json.loads(data.decode('utf-8'))
                 # print(f"Received data from {addr}: {json_data.get('PSID')}")
-            timing = decode_spat(json_data.get('Payload'), verbose=True)
+                timing = decode_spat(json_data.get('Payload'), json_data.get('Spat1_mess'), verbose=True)
             
