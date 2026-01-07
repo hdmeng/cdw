@@ -5,11 +5,24 @@ import json
 if __name__ == "__main__":
     maps_hex = mpp.read_mapsHex_from_file('maps/D4-ECR_2025.payload')
     for intxn_name in maps_hex.keys():
-        intxn_json = mpp.MessageFrame_payload_to_json(maps_hex[intxn_name])
-        intxn_center = mpp.get_intersection_center(intxn_json)
+        mapData_json_raw, mapData_json, _ = mpp.MAP_payload_to_json(maps_hex[intxn_name])
+        
+        intxns = mapData_json.get("intersections", [])
+        intxnData = intxns[0]
+        intxn_center = mpp.get_intersection_center(intxnData)
         print(intxn_name, intxn_center)
         # save intxn_json to file
-        with open(f'maps/json/{intxn_name}_map.json', 'w') as f:
+        with open(f'maps/json/{intxn_name}_map_raw.json', 'w') as f:
             # write as string
-        #    f.write(str(intxn_json))
-            f.write(json.dumps(intxn_json, ensure_ascii=False, indent=2))
+            f.write(str(mapData_json_raw))
+        with open(f'maps/json/{intxn_name}_map.json', 'w') as f:
+            f.write(json.dumps(mapData_json, ensure_ascii=False, indent=2))
+        
+        # eliminate duplicate lanes and convert back to payload
+        mapData_rev = mpp.MAP_json_to_payload(mapData_json_raw, True)
+        # print Bytes length
+        print(f'Original payload length: {len(maps_hex[intxn_name])}, Revised payload length: {len(mapData_rev)}')
+        # decode back to JSON for verification
+        mapData_rev_json, _ = mpp.MAP_payload_to_json(mapData_rev)
+        with open(f'maps/json/{intxn_name}_map_rev.json', 'w') as f:
+            f.write(json.dumps(mapData_rev_json, ensure_ascii=False, indent=2))

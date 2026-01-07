@@ -60,46 +60,85 @@ def make_serializable(obj):
     if isinstance(obj, tuple):
         # handle (bytes, n) or generic tuple
         if len(obj) == 2 and isinstance(obj[0], (bytes, bytearray)) and isinstance(obj[1], int):
+            # get obj[1] bits from obj[0] bytes as int
+            
             b = bytes(obj[0])
-            return {
-                "type": "bitfield",
-                "hex": b.hex(),
-                "bits": obj[1],
-                "int": int.from_bytes(b, "big"),
+            # return {
+                #"type": "bitfield",
+                #"hex": b.hex(),
+                #"bits": obj[1],
+                #"int": int.from_bytes(b, "big"),
                 # "b64": base64.b64encode(b).decode()
-            }
+            # }
+            return int.from_bytes(b, "big")%(1<<obj[1])
+        #elif len(obj) == 2 and isinstance(obj[0], str) and isinstance(obj[1], list):
+        elif len(obj) == 2 and isinstance(obj[0], str):
+            return {obj[0]: make_serializable(obj[1])}
+
         return [make_serializable(v) for v in obj]
     if isinstance(obj, (bytes, bytearray)):
         b = bytes(obj)
         return {"type": "bytes", "hex": b.hex(), "int": int.from_bytes(b, "big")}
     return obj
 
-# Define a function to convert the Message Frame payload to JSON
-def MessageFrame_payload_to_json(payload):
+# Define a function to convert the MessageFrame MAP payload to JSON
+def MAP_payload_to_json(payload):
     # Decode the Message Frame payload using the ASN.1 specification
     decoded = j2735_spec.decode("MessageFrame", payload)
     value_decoded = decoded.get("value")
 
     # Decode the nested value field if it's still encoded
     if isinstance(value_decoded, bytes):
-        MapData_json = j2735_spec.decode("MapData", value_decoded)
+        mapData_json_raw = j2735_spec.decode("MapData", value_decoded)
     else: 
-        MapData_json = value_decoded
+        mapData_json_raw = value_decoded
 
     # Convert to a JSON-serializable format
-    MapData_json = make_serializable(MapData_json)
-    
+    mapData_json = make_serializable(mapData_json_raw)
+
     # Extract the msgIssueRevision and layerType
-    msg_issue_revision = MapData_json.get("msgIssueRevision", None)
-    layer_type = MapData_json.get("layerType", None)
+    msg_issue_revision = mapData_json.get("msgIssueRevision", None)
+    layer_type = mapData_json.get("layerType", None)   
 
     # Extract the intersections
-    intxns = MapData_json.get("intersections", [])
+    intxns = mapData_json_raw.get("intersections", [])
     if not intxns:
         return None
-    intxnData = intxns[0]
+    intxn_json = intxns[0]
 
-    return intxnData
+    return mapData_json_raw, mapData_json, intxn_json
+
+# convert MAP JSON to hex payload
+def MAP_json_to_payload(mapData_json_raw, elim_dupl_lanes=True):
+    
+    if elim_dupl_lanes:
+        # eliminate duplicate lanes based on laneID
+        lane_ids = set()
+        unique_intersections = []
+        for intxn in mapData_json_raw.get("intersections", []):
+            unique_lanes = []
+            for lane in intxn.get("laneSet", []):
+                lane_id = lane.get("laneID")
+                if lane_id not in lane_ids:
+                    lane_ids.add(lane_id)
+                    unique_lanes.append(lane)
+            intxn["laneSet"] = unique_lanes
+            unique_intersections.append(intxn)
+        mapData_json_raw["intersections"] = unique_intersections
+
+    # Encode the MapData structure using the ASN.1 specification
+    mapdata_payload = j2735_spec.encode("MapData", mapData_json_raw)
+
+    # Construct the MessageFrame structure
+    messageFrame_struct = {
+        "messageId": 18,  # Message ID for MAP
+        "value": mapdata_payload
+    }
+
+    # Encode the MessageFrame structure using the ASN.1 specification
+    messageFrame_payload = j2735_spec.encode("MessageFrame", messageFrame_struct)
+
+    return messageFrame_payload
 
 # Define a function to get the intersection center
 def get_intersection_center(intxn):
@@ -289,6 +328,7 @@ def read_hex_from_file(file_path):
 # Define a function to read hex strings from multiple payload file
 # file format: 
 # row #n: payload 8-023 723 hex_string
+# format 2: 1001 ecr-medical-foundation hex_string
 def read_mapsHex_from_file(file_path):
     with open(file_path, 'r') as file:
         lines = file.readlines()
@@ -344,7 +384,7 @@ def get_detector_pos(detector_file, intxn_id='all'):
 if __name__ == "__main__":
     maps_hex = read_mapsHex_from_file('conf/payload/LA-Hollywood-55-hgt.payload')
     for intxn_name in maps_hex.keys():
-        intxn_json = MessageFrame_payload_to_json(maps_hex[intxn_name])
+        intxn_json, _ = MAP_payload_to_json(maps_hex[intxn_name])
         intxn_center = get_intersection_center(intxn_json)
         print(intxn_name, intxn_center)
         

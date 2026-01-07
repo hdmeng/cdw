@@ -1,7 +1,7 @@
 import threading
 import asyncio
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_socketio import SocketManager
 import time
@@ -87,12 +87,13 @@ intxn_json = {}
 # return: [{"name": "intxn1", "center": {"lat": 34.1054162, "lng": -118.2918061}}, ...]
 @app.get('/api/intxn_list')
 async def get_intxns(site: str):
-    global maps_hex, intxn_json
+    global maps_hex, intxn_json, maps_hex_interim
     if site == 'HLWD':
         # Read the MAP payload from the file
         maps_hex = mpp.read_mapsHex_from_file('maps/LA-Hollywood-55-hgt.payload')
     elif site == 'ECR':
         maps_hex = mpp.read_mapsHex_from_file('maps/ECR-Testbed-2025.payload')
+        maps_hex_interim = mpp.read_mapsHex_from_file('maps/D4-ECR_interim.payload')
     elif site == 'RFS':
         maps_hex = mpp.read_mapsHex_from_file('maps/RFS-Testbed.payload')    
     else:
@@ -101,7 +102,7 @@ async def get_intxns(site: str):
     intxn_list = []
     for intxn_name in maps_hex.keys():
         map_payload = maps_hex[intxn_name]
-        intxn_json[intxn_name] = mpp.MessageFrame_payload_to_json(map_payload)
+        _, _, intxn_json[intxn_name] = mpp.MAP_payload_to_json(map_payload)
         intxn_center = mpp.get_intersection_center(intxn_json[intxn_name])
         intxn_list.append({"name": intxn_name, "center": intxn_center})
     return JSONResponse(intxn_list)
@@ -117,6 +118,40 @@ async def get_intxn_lanes(request: Request):
         return JSONResponse(all_lane_points)
     else:
         return JSONResponse({"error": f"{post_name} not found"}, status_code=404)
+
+# get the map files for the given intersection
+@app.get('/api/mapfiles')
+async def get_map_files(intxn: str):
+    # read the MAP payload from the file /home/cdw/data-server/maps/D4-ECR_interim.payload
+    global maps_hex_interim
+    if intxn in maps_hex_interim.keys():
+        map_payload = maps_hex_interim[intxn]
+        map_payload_hex = map_payload.hex().upper()
+        map_payload_str = ' '.join(map_payload_hex[i:i+2] for i in range(0, len(map_payload_hex), 2))
+        map_json_raw, map_json, _ = mpp.MAP_payload_to_json(map_payload)
+        # eliminate duplicate lanes and convert back to payload
+        map_payload_rev = mpp.MAP_json_to_payload(map_json_raw, True)
+        return JSONResponse({
+            "map_payload_bytes": map_payload_str,
+            "map_json": map_json,
+            "map_payload": map_payload_hex,
+            "map_payload_len": len(map_payload),
+            "map_payload_rev": map_payload_rev.hex().upper(),
+            "map_payload_rev_len": len(map_payload_rev),
+        })
+    else:
+        return JSONResponse({"error": f"{intxn} not found"}, status_code=404)
+    
+# Add this endpoint to serve JSON map files
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """Serve JSON map files from the maps/json directory"""
+    file_path = f"/home/cdw/maps/json/{filename}"
+    if os.path.exists(file_path):
+        headers = {"Content-Disposition": f"attachment; filename={filename}"}
+        return FileResponse(file_path, headers=headers)
+    else:
+        return JSONResponse({"error": "File not found"}, status_code=404)
 
 # RSU configuration from env
 #RSU_AUTH = os.getenv('RSU_AUTH', "-t 2 -v 3 -l authPriv -a SHA512 -A XjXJ5wU@3 -x AES256 -X XjXJ5wU#3 -u rsp")

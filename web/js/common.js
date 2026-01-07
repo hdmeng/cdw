@@ -161,6 +161,8 @@ async function populateSidebar(intxns) {
             // change the text color of the selected item
             listItem.style.color = 'red';
             cv2x.lastListItem = listItem;
+            // show map files
+            showMapFiles(intxn.name);
         });
         intxnList.appendChild(listItem);
     });
@@ -245,4 +247,43 @@ async function addLoops(site, baseMap) {
     } catch (error) {
         console.error('Error obtaining lanes:', error);
     }    
+}
+
+// function for showing map payload and json files
+async function showMapFiles(intxnName) {
+    try {
+        const response = await fetch(`${cv2x._config.SVR_URL}/api/mapfiles?intxn=${intxnName}`,);
+        const mapFiles = await response.json();
+        const mapJsonLink = document.getElementById('mapJson');
+        const mapJsonRevLink = document.getElementById('mapJsonRev');
+        const mapPayloadLink = document.getElementById('mapPayload');
+        const mapPayloadRevLink = document.getElementById('mapPayloadRev');
+               
+        if (mapFiles && !mapFiles.error) {
+            // show the payload and json in the modal
+            document.getElementById('mapPayloadContent').textContent = mapFiles.map_payload_bytes;
+            document.getElementById('mapJsonContent').textContent = JSON.stringify(mapFiles.map_json, null, 2);
+            // show the modal
+            // const mapFilesModal = new bootstrap.Modal(document.getElementById('mapFilesModal'));
+            // mapFilesModal.show();
+
+            
+        } else {
+            document.getElementById('mapPayloadContent').textContent = 'N/A';
+            document.getElementById('mapJsonContent').textContent = 'N/A';
+        //    mapPayloadLink.href = '#';
+        //    mapJsonLink.href = '#';
+        //    mapPayloadRevLink.href = '#';
+        //    mapJsonRevLink.href = '#';
+        }  
+
+        mapPayloadLink.href = `${cv2x._config.SVR_URL}/download/${intxnName}.payload`;
+        mapJsonLink.href = `${cv2x._config.SVR_URL}/download/${intxnName}_map.json`;
+            // mapJsonLink.download = `${intxnName}_map.json`;
+        mapPayloadRevLink.href = `${cv2x._config.SVR_URL}/download/${intxnName}_rev.payload`;                
+        mapJsonRevLink.href = `${cv2x._config.SVR_URL}/download/${intxnName}_map_rev.json`;
+            // mapJsonRevLink.download = `${intxnName}_map_rev.json`;
+    } catch (error) {
+        console.error('Error fetching map files:', error);
+    }
 }

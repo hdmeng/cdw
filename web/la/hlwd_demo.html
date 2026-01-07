@@ -1,0 +1,255 @@
+<!-- Generate Intersection Dynamic Map -->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>V2X Transit Signal Priority Demo</title>
+    <!-- <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script> -->
+    <script src="../js/common.js"></script>
+    <!-- <script src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&callback=initMap&v=weekly&libraries=marker"
+            defer></script> -->
+    <style>
+        .tab {
+            display: none;
+        }
+        .tab.active {
+            display: block;
+        }
+        .tab-links {
+            cursor: pointer;
+            padding: 10px;
+            background-color: #f1f1f1;
+            display: inline-block;
+        }
+        .tab-links.active {
+            background-color: #ccc;
+        }
+        /* #bsm {
+            height: 640px;
+            width: 640px;
+        } */
+        #sidebar {
+            width: 200px;
+            height: 90%;
+            position: absolute;
+            left: 0;
+            color: white;
+            background-color: #165391;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        #vmapContent {
+            margin-left: 220px; /* Adjust this value based on the width of your sidebar */
+        } 
+    </style>
+    <script>
+
+        // const socket = io(`http://128.32.129.118:5000`, {
+        //     path: "/socket.io/",
+        //     transports: ["websocket"],
+        //     reconnection: true,
+        //     reconnectionAttempts: 5,
+        //     reconnectionDelay: 1000,
+        //     autoConnect: false  // Connect manually to add logging
+        // });
+
+        // socket.on('connect', () => {
+        //     console.log('Socket connected successfully');
+        // });
+
+        // socket.on('connect_error', (error) => {
+        //     console.error('Socket connection error:', error);
+        // });
+
+        // socket.on('disconnect', () => {
+        //     console.log('Socket disconnected');
+        // });
+
+
+        async function bsmTraj() {
+            try {
+                // 
+                // const configResponse = await fetch('http://128.32.129.118:5000/config/netconfig');
+                // const configData = await configResponse.json();
+
+                // Load the Google Maps API with the fetched API key
+                await loadGoogleMapsAPI();
+
+                // Fetch map center coordinates from the API
+                // const mapCenterResponse = await fetch(`${cv2x._config.SVR_URL}:${cv2x._config.SVR_PORT}/api/map_center?site=HLWD`);
+                // const mapCenter = await mapCenterResponse.json();
+
+                // Create the map
+                dtMap = new google.maps.Map(document.getElementById("bsmContent"), {
+                    zoom: 19,
+                    center: {lat: 34.094408, lng: -118.330568},
+                    mapTypeId: 'satellite',
+                    mapId: 'LA_HLWD',
+                });
+
+                await addLoops('HLWD', dtMap);
+
+                // Fetch initial marker coordinates from the API
+                const markersResponse = await fetch(`${cv2x._config.SVR_URL}/api/markers`);
+                const markerCoord = await markersResponse.json();
+                
+                // Define the custom icon
+                // const icon = {
+                //     url: './img/car-top.png', // Path to your local image
+                //     scaledSize: new google.maps.Size(20, 20), // Scale the image to desired size
+                // };
+
+                const carImg = document.createElement('img');
+                carImg.src = '../media/car-top.png'
+                // change the size of the image
+                carImg.style.width = '50px';
+                carImg.style.height = '50px';
+                // change the rotation of the image
+                rotateDeg = 45;
+                carImg.style.transform = `rotate(${rotateDeg}deg)`;
+
+
+                const vehMarker = new google.maps.marker.AdvancedMarkerElement({
+                    map: dtMap,
+                    position: markerCoord,
+                    title: "Bus 02405",
+                    content: carImg
+                });
+
+                // create info window for the vehicle 
+                const infoWindow = new google.maps.InfoWindow({
+                    content: "Bus 02405",
+                    // no top and bottom padding
+                    pixelOffset: new google.maps.Size(0, -15)
+                });
+                // Remove the close button from the InfoWindow
+                google.maps.event.addListener(infoWindow, 'domready', () => {
+                    const closeButton = document.querySelector('.gm-ui-hover-effect');
+                    if (closeButton) {
+                        closeButton.style.display = 'none';
+                    }
+                });
+                infoWindow.open({
+                    anchor: vehMarker,
+                    map: dtMap
+                });
+
+                // turn on and off the periodic call upon some button click
+                const toggleButton = document.getElementById('toggleButton');
+                toggleButton.addEventListener('click', () => {
+                    if (toggleButton.classList.contains('active')) {
+                        clearInterval(intervalId);
+                        toggleButton.classList.remove('active');
+                    } else {
+                        intervalId = setInterval(async () => {
+                            // Replace with your API call
+                            await fetch(`${cv2x._config.SVR_URL}/api/veh_loc?vehid=02405`)
+                                .then(response => response.json())
+                                .then(data => {
+                                    dtMap.setCenter(new google.maps.LatLng(data.lat, data.long));
+                                    const newPosition = new google.maps.LatLng(data.lat-0.00003, data.long);
+                                    vehMarker.position = newPosition;
+                                    // infoWindow.position = {lat: data.lat, lng: data.long};
+                                    carImg.style.transform = `rotate(${data.heading+90}deg)`;
+                                    
+                                    // display data in the textarea
+                                    const vehLog = document.getElementById('vehLog').getElementsByTagName('textarea')[0];
+                                    vehLog.value = `Time Elapsed: ${data.minMark}:${data.secMark.toFixed(1)} 
+                                            Bus ID: ${data.id}
+                                            Latitude: ${data.lat}\nLongitude: ${data.long}
+                                            Speed: ${data.speed} mph\nDist2Intxn: ${data.iR} 
+                                            Lane ID: ${data.lane_id_dir[0]}\tLane Dir: ${data.lane_id_dir[1]}
+                                            Dist2StopLine: ${data.dist2stop} m\n 
+                                            State: ${data.zone_state}`;
+                                    if (data.zone_state > 4) {
+                                        const beep = new Audio('../media/car-horn.mp3'); // Example beep sound URL
+                                        beep.play();
+                                        infoWindow.setContent(`Bus 02405<br>Passing B${Math.floor(data.zone_state/4)} Loop`);
+                                    } else {
+                                        infoWindow.setContent(`Bus 02405`);
+                                    }
+                            });
+                        }, 100); // Update every 0.1 second
+                        toggleButton.classList.add('active');
+                    }
+                });
+
+
+                // // Connect to the WebSocket server
+                // socket.connect();
+
+                // // Listen for vehicle updates
+                // socket.on('veh_update', (data) => {
+                //    console.log(data) 
+                //    const newPosition = new google.maps.LatLng(data.lat, data.lng);
+                //    marker.setPosition(newPosition);
+                // });
+            } catch (error) {
+                console.error('Error initializing map:', error);
+            }
+        }
+
+
+        
+        // Open the specified tab
+        async function openTab(event, tabName) {
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+
+            const tabLinks = document.querySelectorAll('.tab-links');
+            tabLinks.forEach(link => link.classList.remove('active'));
+
+            document.getElementById(tabName).classList.add('active');
+            if (event) {
+                event.currentTarget.classList.add('active');
+            }
+
+            // Call the appropriate function based on the tab name
+            if (tabName === 'vmap') {
+            //    socket.disconnect();
+
+                await mapValidate('HLWD');
+            } else if (tabName === 'bsm') {
+                await bsmTraj();
+            }  else {
+            //    socket.disconnect();
+            }
+        }
+
+        // window.onload = bsmTraj;
+        window.onload = function() {
+
+            openTab(null, 'vmap');
+        }
+    </script>
+</head>
+<body>
+    <div>
+        <span class="tab-links active" onclick="openTab(event, 'bsm')">Digital Scene - TSP</span>
+        <span class="tab-links" onclick="openTab(event, 'vmap')">MAP Validation</span>
+        <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
+    </div>
+    <div id="bsm" class="tab active">
+        <button id="toggleButton" style="margin: 10px; padding: 5px 10px;">Start/Stop</button>
+        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+            <div id="bsmContent" style="height: 600px; width: 80%;"></div>
+            <div id="vehLog" style="width: 16%; height: 600px; padding: 10px;">
+                <textarea style="width: 100%; height: 100%; background-color: black; color: white; border: none; resize: none;" placeholder="Enter text here..."></textarea>
+            </div>
+        </div>
+        <div id="bsmContent" style="height: 600px; width: 80%;"></div>
+        <div id="vehLog" style="width: 16%; height: 600px; float: right; padding: 10px;">
+            <textarea style="width: 100%; height: 100%; background-color: black; color: white; border: none; resize: none;" placeholder="Enter text here..."></textarea>
+        </div>
+    </div>
+    <div id="vmap" class="tab">
+        <div id="sidebar">
+            <ul id="intxnList"></ul>
+        </div>
+        <div id="vmapContent" style="height: 640px; width: 640px;"></div>
+    </div>
+    <div id="support" class="tab">
+        <a href="download/atcmtd_rsp_09_202411.tar.gz" download>Download Support File</a>
+    </div>
+</body>
+</html>

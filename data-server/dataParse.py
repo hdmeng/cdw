@@ -7,7 +7,7 @@ from tabnanny import verbose
 import argparse  # Import the argparse module
 
 # Load the compiled ASN.1 specification from a file
-with open('./J2735Common/j2735_spec_2.pkl', 'rb') as f:
+with open('./J2735Common/pkl/j2735_spec_2.pkl', 'rb') as f:
     j2735_spec = pickle.load(f)
 
 # color mapping for signal states

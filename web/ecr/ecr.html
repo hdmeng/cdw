@@ -48,6 +48,12 @@
             background-color: #f1f1f1;
             border: 2px solid #165391;
         }
+        .downloadlink {
+            display: block; 
+            margin: 5px 0; 
+            color: #165391; 
+            text-decoration: none;
+        }
         
     </style>
     <script>
@@ -88,7 +94,7 @@
 </head>
 <body>
     <div>
-        <span class="tab-links" onclick="openTab(event, 'bsm')">BSM Trajectory</span>
+        <span class="tab-links" onclick="openTab(event, 'bsm')">Facility</span>
         <span class="tab-links active" onclick="openTab(event, 'vmap')">Intersections</span>
         <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
     </div>
@@ -102,13 +108,27 @@
                     <ul id="intxnList"></ul>
                 </div>
             </div>
-            <div style="flex: 2;">
-                <div id="vmapContent" style="width: 80%; height: auto; aspect-ratio: 1/1;"></div>
+            <div style="flex: 3;">
+                <div id="vmapContent" style="width: 90%; height: auto; aspect-ratio: 1/1;"></div>
             </div>
-            <div style="flex: 1;">
-                <div id="rsuStatus" >
-                    <h3>RSU Status</h3>
-                    <p>RSU Status information will be displayed here.</p>
+            <div style="flex: 2;">
+                <div id="mapFiles" style="margin-right: 30px;">
+                    <h3>MAP Validation</h3>
+                    <div id="mapFileList"></div>
+                    <div id="mapPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
+                    
+                    <textarea id="mapJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
+                    <div style="margin-top: 20px;">
+                        <h3>Download Files</h3>
+                        <a href="#" id="mapPayload" class="downloadlink" >
+                            MAP Payload (USDOT Tool Generated) </a>  
+                        <a href="#" id="mapJson" class="downloadlink" download>
+                            MAP JSON (Parsed by ASN1TOOL) </a> <br>
+                        <a href="#" id="mapPayloadRev" class="downloadlink" >
+                            MAP Payload (Revised) </a> 
+                        <a href="#" id="mapJsonRev" class="downloadlink" download>
+                            MAP JSON (Revised) </a> <br>
+                    </div>
                 </div>
             </div>
         </div>
@@ -122,7 +142,7 @@
         </div> -->
     </div>
     <div id="support" class="tab">
-        <a href="download/atcmtd_rsp_09_202411.tar.gz" download>Download ECR Factsheet</a>
+        <a href="download/" download>Download ECR Factsheet</a>
     </div>
 </body>
 </html>
