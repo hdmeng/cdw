@@ -4,19 +4,22 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi_socketio import SocketManager
+
 import time
 import socket
 import sys
-# Add the data-server directory to the Python path
-sys.path.append('./data-server')
-import mapParse as mpp
-import dataParse as dap
 import subprocess
 import logging
 import json
 import uvicorn
 import os
 from dotenv import load_dotenv
+import base64
+
+# Add the data-server directory to the Python path
+sys.path.append('./data-server')
+import mapParse as mpp
+import dataParse as dap
 
 # Load environment variables
 load_dotenv()
@@ -153,6 +156,43 @@ async def download_file(filename: str):
     else:
         return JSONResponse({"error": "File not found"}, status_code=404)
 
+# procee map payload upload and return the revied MAP JSON and payload
+@app.post('/api/process_map_payload')
+async def process_map_payload(request: Request):
+    try:
+        data = await request.json()
+        filename = data.get('filename')
+        base64_content = data.get('content')
+        
+        if not base64_content:
+            return JSONResponse({"error": "No content provided"}, status_code=400)
+        
+        # Decode base64 to bytes
+        content = base64.b64decode(base64_content)
+      
+        # Process the payload (your existing logic)
+        try:
+            # Assume the uploaded file contains hex string
+            hex_string = content.decode('utf-8').replace('\n', '').replace(' ', '')
+            map_payload = bytes.fromhex(hex_string)
+            
+            # Convert payload to JSON
+            map_json_raw, map_json, _ = mpp.MAP_payload_to_json(map_payload)
+            
+            # Eliminate duplicate lanes and convert back to payload
+            map_payload_rev = mpp.MAP_json_to_payload(map_json_raw, elim_dupl_lanes=True)
+            
+            return JSONResponse({
+                "map_payload_rev": map_payload_rev.hex().upper(),
+                "map_payload_rev_size": len(map_payload_rev),
+                "map_json": map_json,
+            })
+        except Exception as e:
+            return JSONResponse({"error": f"Failed to process payload: {str(e)}"}, status_code=500)
+            
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid request: {str(e)}"}, status_code=400)
+
 # RSU configuration from env
 #RSU_AUTH = os.getenv('RSU_AUTH', "-t 2 -v 3 -l authPriv -a SHA512 -A XjXJ5wU@3 -x AES256 -X XjXJ5wU#3 -u rsp")
 RSU_AUTH = os.getenv('RSU_AUTH', "-t 2 -v 3 -l authPriv -a SHA512 -A Path$%@106 -x AES256 -X Path$%@106 -u datasvr")
@@ -197,25 +237,28 @@ spat_phases = []
 @app.get('/api/tsc_state')
 async def get_controller_state(rsnode: str):
     global spat_phases
-    sig_state = ['R','R','R','R','R','R','R','R'
+    sig_state = ['G','R','R','R','R','R','R','R'
             ,'R','R','R','R','R','R','R','R','R']  # Default signal states
+    
+    spat_state = {}
     for phase in spat_phases:
         # print(f"SPaT Phase: {phase}")
         sig_state[phase['signalGroup']] = phase['eventState'] 
-    
-    spat_state = {
-        "Ph2": sig_state[2], "Ph4": sig_state[4],
-        "Ph6": sig_state[6], "Ph8": sig_state[8],
-        "Ph10": sig_state[10], "Ph12": sig_state[12],
-        "Ph14": sig_state[14], "Ph16": sig_state[16]
-    }
+        spat_state[str(phase['signalGroup'])] = sig_state[phase['signalGroup']]
+        
+    # {    "Ph2": sig_state[2], "Ph4": sig_state[4],
+    #     "Ph6": sig_state[6], "Ph8": sig_state[8],
+    #     "Ph10": sig_state[10], "Ph12": sig_state[12],
+    #     "Ph14": sig_state[14], "Ph16": sig_state[16]
+    # }
     return JSONResponse(spat_state)
 
 
 # get Signal Phases and Timing upon incoming SPaT messages
 def spat_update():
-    global spat_phases
+    global spat_phases, data_1609
 
+    # Create a UDP socket for listening
     listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     LISTEN_PORT = int(os.getenv('SPAT_LISTEN_PORT', 15009))
     listen_socket.bind(('', LISTEN_PORT))
@@ -223,24 +266,39 @@ def spat_update():
     while not should_stop.is_set():
         try:
             message, address = listen_socket.recvfrom(1024)  # Buffer size is 1024 bytes
-            json_data = json.loads(message.decode('utf-8'))
+            data_1609 = json.loads(message.decode('utf-8'))
             # Check if the message contains SPaT data
-            if (json_data.get('PSID') == "8002") :
+            if (data_1609.get('PSID') == "8002") :
                 # Process the incoming SPaT message
-                spat_phases = dap.decode_spat(json_data.get('Payload'), verbose=False)
-
+                spat_phases = dap.decode_spat(data_1609.get('Payload'), data_1609.get('Spat1_mess'), verbose=False)
         except Exception as e:
             print(f"Error in SPaT update: {e}")
     
     # Clean up resources
     listen_socket.close()
 
-# get MEC status
-@app.get('/api/mec_state')
-async def get_mec_status():
-    # Implement your logic to retrieve MEC status
-    mec_status = {
-        "Status": "active", 
+# get the exampled spat files for the given intersection
+@app.get('/api/spatfiles')
+async def get_spat_files(intxn: str):
+    # read the MAP payload from the file /home/cdw/data-server/maps/D4-ECR_interim.payload
+    global spat_phases, data_1609
+    spat_payload = data_1609.get('Payload')
+    spat_payload_str = ' '.join(spat_payload[i:i+2] for i in range(0, len(spat_payload), 2))
+    spat_json = spat_phases
+    return JSONResponse({
+        "spat_payload_bytes": spat_payload_str,
+        "spat_json": spat_json,
+    })
+    
+
+# get RSP status
+@app.get('/api/rsp_state')
+async def get_rsp_status():
+
+    # Implement your logic to retrieve RSP status
+    rsp_status = {
+        "Status": "active",
+        "Connection": "connected",
         "SiteName": "RFS-coin",
         "OprFuncs": {
             "MrpSpat": "Active",
@@ -252,7 +310,7 @@ async def get_mec_status():
             "RTCM": "Inactive"
         }
     }
-    return JSONResponse(mec_status)
+    return JSONResponse(rsp_status)
 
 # get message statistics
 @app.get('/api/msg_stats')

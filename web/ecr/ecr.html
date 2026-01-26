@@ -4,7 +4,6 @@
 <html>
 <head>
     <title>intxn V2X Applications Demo</title>
-    <!--<script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>-->
     <script src="../js/common.js"></script>
     
     <style>
@@ -23,10 +22,6 @@
         .tab-links.active {
             background-color: #ccc;
         }
-        /* #bsm {
-            height: 640px;
-            width: 640px;
-        } */
         #sidebar {
             width: 200px;
             height: 90%;
@@ -36,14 +31,93 @@
             background-color: #165391;
             overflow-y: auto;
             padding-top: 10px;
-            padding-left: 1px;
+            padding-left: 10px;
             line-height: 1.35;
         }
-        #vmapContent {
+        #sidebar select {
+            width: 90%;
+            margin-bottom: 10px;
+            padding: 8px;
+            background-color: white;
+            color: #165391;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        #sidebar select option {
+            background-color: white;
+            color: #165391;
+        }
+        .sidebar-button {
+            display: block;
+            width: 90%;
+            margin: 5px 0;
+            padding: 10px;
+            background-color: #ffffff;
+            color: #165391;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-align: center;
+        }
+        .sidebar-button:hover {
+            background-color: #e0e0e0;
+        }
+        .sidebar-button.active {
+            background-color: #cccccc;
+            font-weight: bold;
+        }
+        #figContent {
             margin-left: 10px; /* Adjust this value based on the width of your sidebar */
+            position: relative; /* For absolute positioning of overlay */
         } 
+        .map-container {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .spat-container {
+            width: 100%;
+            height: 100%;
+            display: none;
+            background-color: #f9f9f9;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        #spatUpdates {
+            background-color: #333;
+            color: white;
+            font-family: monospace;
+            padding: 10px;
+            height: 100%;
+            overflow-y: auto;
+            border-radius: 4px;
+            white-space: pre-wrap;
+        }
+        .tsc-overlay {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 14px;
+            max-width: 300px;
+            z-index: 1000;
+        }
+        .scrolling-text {
+            white-space: nowrap;
+            overflow: hidden;
+            animation: scroll-left 10s linear infinite;
+        }
+        @keyframes scroll-left {
+            0% { transform: translateX(100%); }
+            100% { transform: translateX(-100%); }
+        }
         #rsuStatus {
-            /* margin-top: 10px; */
             padding: 10px; 
             background-color: #f1f1f1;
             border: 2px solid #165391;
@@ -54,9 +128,147 @@
             color: #165391; 
             text-decoration: none;
         }
-        
+        .upload-section {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .upload-section h3 {
+            margin-top: 0;
+            color: #165391;
+        }
+        .upload-section input[type="file"] {
+            margin: 10px 0;
+        }
+        .upload-section button {
+            background-color: #165391;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .upload-section button:hover {
+            background-color: #0d3a5c;
+        }
+        #payloadResult {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #333;
+            color: white;
+            white-space: pre-wrap;
+            font-family: monospace;
+            max-height: 300px;
+            overflow-y: auto;
+            border-radius: 4px;
+        }
     </style>
     <script>
+        // Function to handle sidebar button clicks
+        function selectView(viewType) {
+            cv2x.viewTab = viewType;
+            // Remove active class from all buttons
+            const buttons = document.querySelectorAll('.sidebar-button');
+            buttons.forEach(btn => btn.classList.remove('active'));
+            
+            // Add active class to clicked button
+            event.target.classList.add('active');
+            
+            const mapContainer = document.getElementById('mapContainer');
+            const spatContainer = document.getElementById('spatContainer');
+            const mapFileContainer = document.getElementById('mapFileContainer');
+            const spatFileContainer = document.getElementById('spatFileContainer');
+            
+            // Handle different view types
+            if (viewType === 'MAP') {
+                // Show MAP view
+                mapContainer.style.display = 'block';
+                spatContainer.style.display = 'none';
+                mapFileContainer.style.display = 'block';
+                spatFileContainer.style.display = 'none';
+                showMapFiles(cv2x.thisIntxn.name);
+                if (window.spatInterval) {
+                    clearInterval(window.spatInterval);
+                    window.spatInterval = null;
+                }
+                console.log('Switched to MAP view');
+            } else if (viewType === 'SPaT') {
+                // Show SPaT view
+                mapContainer.style.display = 'none';
+                spatContainer.style.display = 'block';
+                mapFileContainer.style.display = 'none';
+                spatFileContainer.style.display = 'block';
+                showSPATStatus(); // Load initial SPaT status
+                showSpatFiles(cv2x.thisIntxn.name);
+                // Start periodic updates
+                if (!window.spatInterval) {
+                    window.spatInterval = setInterval(showSPATStatus, visual.spatInterval); // Update every 2 seconds
+                }
+                console.log('Switched to SPaT view');
+            } else if (viewType === 'RSP') {
+                // Placeholder for RSP view
+                mapContainer.style.display = 'none';
+                spatContainer.style.display = 'none';
+                fileContainer.style.display = 'none';
+                if (window.spatInterval) {
+                    clearInterval(window.spatInterval);
+                    window.spatInterval = null;
+                }
+                console.log('Switched to RSP view - not implemented yet');
+            }
+        }
+
+        // Function to upload and process payload file
+        async function uploadPayload() {
+            const fileInput = document.getElementById('payloadUpload');
+            const resultDiv = document.getElementById('payloadResult');
+            
+            if (!fileInput.files[0]) {
+                resultDiv.textContent = 'Please select a file to upload.';
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            
+            try {
+                resultDiv.textContent = 'Processing...';
+                
+                // Read file as base64
+                const base64Content = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result.split(',')[1]); // Remove data: prefix
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+                
+                // Send as JSON instead of FormData
+                const response = await fetch(`${cv2x._config.SVR_URL}/api/process_map_payload`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filename: file.name,
+                        content: base64Content
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                // Display the processed result
+                resultDiv.textContent = JSON.stringify(result, null, 2);
+                
+            } catch (error) {
+                console.error('Upload failed:', error);
+                resultDiv.textContent = `Error processing payload: ${error.message}`;
+            }
+        }
 
         // Open the specified tab
         function openTab(event, tabName) {
@@ -73,28 +285,23 @@
 
             // Call the appropriate function based on the tab name
             if (tabName === 'vmap') {
-                // socket.off('marker_update');
-
                 mapValidate('ECR');
-            } else if (tabName === 'bsm') {
+                // Set MAP as default active button
+                document.querySelector('.sidebar-button[data-view="MAP"]').classList.add('active');
+                // startTSCUpdates(); // Start TSC updates when vmap tab is opened
+            } else if (tabName === 'facility') {
                 bsmTraj();
-            }  else {
-                // socket.off('marker_update');
             }
         }
 
-        // window.onload = bsmTraj;
         window.onload = function() {
-            // load Google Maps JavaScript API
-            // loadGoogleMapsAPI();
-
             openTab(null, 'vmap');
         }
     </script>
 </head>
 <body>
     <div>
-        <span class="tab-links" onclick="openTab(event, 'bsm')">Facility</span>
+        <span class="tab-links" onclick="openTab(event, 'facility')">Facility</span>
         <span class="tab-links active" onclick="openTab(event, 'vmap')">Intersections</span>
         <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
     </div>
@@ -105,44 +312,95 @@
         <div style="display: flex; height: 100%;">
             <div style="flex: 1;">
                 <div id="sidebar">
-                    <ul id="intxnList"></ul>
+                    <select id="intxnSelect" onchange="selectIntersection(this.value)">
+                        <option value="">Select Intersection</option>
+                    </select>
+                    
+                    <button class="sidebar-button active" data-view="MAP" onclick="selectView('MAP')">MAP</button>
+                    <button class="sidebar-button" data-view="SPaT" onclick="selectView('SPaT')">SPaT</button>
+                    <button class="sidebar-button" data-view="RSP" onclick="selectView('RSP')">RSP</button>
                 </div>
             </div>
             <div style="flex: 3;">
-                <div id="vmapContent" style="width: 90%; height: auto; aspect-ratio: 1/1;"></div>
+                <div id="figContent" style="width: 90%; height: auto; aspect-ratio: 1/1;">
+                    <!-- Map Container -->
+                    <div id="mapContainer" class="map-container">                  
+                    </div>
+                    <!-- SPaT Container -->
+                    <div id="spatContainer" class="spat-container">
+                        <h3>SPaT Status</h3>
+                        <button id="spatToggleBtn" onclick="toggleSpatUpdates()" style="padding: 8px 16px; margin-bottom: 10px; background-color: #165391; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                            Stop Updates
+                        </button>
+                        <div id="spatUpdates"></div>
+                    </div>
+                    <div id="rspContainer" class="rsp-container">
+                        <h3>RSP Status</h3>
+                        <div id="rsuStatus">
+                            Loading RSU status...
+                        </div>
+                    </div>    
+                </div>
             </div>
             <div style="flex: 2;">
-                <div id="mapFiles" style="margin-right: 30px;">
-                    <h3>MAP Validation</h3>
-                    <div id="mapFileList"></div>
-                    <div id="mapPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
+                <div id="fileContent" style="margin-right: 30px;">
+                    <!-- Map Files Container -->
+                    <div id="mapFileContainer" class="map-container">
+                        <h3>MAP Validation</h3>
+                        <!-- <div id="mapFileList"></div> -->
+                        <div id="mapPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
                     
-                    <textarea id="mapJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
-                    <div style="margin-top: 20px;">
-                        <h3>Download Files</h3>
-                        <a href="#" id="mapPayload" class="downloadlink" >
-                            MAP Payload (USDOT Tool Generated) </a>  
-                        <a href="#" id="mapJson" class="downloadlink" download>
-                            MAP JSON (Parsed by ASN1TOOL) </a> <br>
-                        <a href="#" id="mapPayloadRev" class="downloadlink" >
-                            MAP Payload (Revised) </a> 
-                        <a href="#" id="mapJsonRev" class="downloadlink" download>
-                            MAP JSON (Revised) </a> <br>
+                        <textarea id="mapJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
+                        <div style="margin-top: 20px;">
+                            <h3>Download Files</h3>
+                            <a href="#" id="mapPayload" class="downloadlink">
+                                MAP Payload (USDOT Tool Generated)
+                            </a>  
+                            <a href="#" id="mapJson" class="downloadlink" download>
+                                MAP JSON (Parsed by ASN1TOOL)
+                            </a><br>
+                            <a href="#" id="mapPayloadRev" class="downloadlink">
+                                MAP Payload (Revised)
+                            </a> 
+                            <a href="#" id="mapJsonRev" class="downloadlink" download>
+                                MAP JSON (Revised)
+                            </a><br>
+                        </div>
+                    </div>
+                    <!-- SPaT Files Container -->
+                    <div id="spatFileContainer" class="map-container">
+                        <h3>SPaT Validation</h3>
+                        <!-- <div id="mapFileList"></div> -->
+                        <div id="spatPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
+                    
+                        <textarea id="spatJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
+                        <div style="margin-top: 20px;">
+                            <h3>Download Files</h3>
+                            <a href="#" id="spatPayload" class="downloadlink">
+                                SPaT Payload (last updated)
+                            </a>  
+                            <a href="#" id="spatJson" class="downloadlink" download>
+                                SPaT JSON (last updated)
+                            </a><br>    
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
-        <!-- <div id="sidebar">
-            <ul id="intxnList"></ul>
-        </div>
-        <div id="vmapContent" style="width: 640px; height: auto; aspect-ratio: 1/1;"></div>
-        <div id="rsuStatus" style="margin-top: 20px; padding: 10px; background-color: #f1f1f1;">
-            <h3>RSU Status</h3>
-            <p>RSU Status information will be displayed here.</p>
-        </div> -->
     </div>
     <div id="support" class="tab">
-        <a href="download/" download>Download ECR Factsheet</a>
+        <div class="upload-section">
+            <h3>Payload Revision</h3>
+            <p>Upload a MAP payload file (.payload) to process and revise it:</p>
+            <input type="file" id="payloadUpload" accept=".payload">
+            <br>
+            <button onclick="uploadPayload()">Upload and Process</button>
+            <div id="payloadResult"></div>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <a href="download/" download>Download ECR Factsheet</a>
+        </div>
     </div>
 </body>
 </html>

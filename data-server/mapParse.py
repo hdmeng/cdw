@@ -345,6 +345,12 @@ def read_mapsHex_from_file(file_path):
                 intxn_name = words[1]
                 hex_string = words[2]
                 maps_hex[intxn_name] = bytes.fromhex(hex_string)
+            elif len(words) == 1:
+                intxn_name = file_path.split('/')[-1].split('.')[0]
+                hex_string = words[0]
+                maps_hex[intxn_name] = bytes.fromhex(hex_string)
+            else:
+                continue
                 
     return maps_hex
 
