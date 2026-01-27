@@ -1,3 +1,25 @@
 /.DS_Store
 /backup
 /old_server
+# Ignore binary serialization files
+pkl/
+*.pkl
+
+# Ignore heavy database files
+db_data/
+*.db
+*.sqlite3
+
+# Python caches
+__pycache__/
+*.pyc
+
+# System files
+.DS_Store
+
+backend/.env
+_backup/
+auth/
+venv/
+backend/port_split.py
+backend/dataStore.py
