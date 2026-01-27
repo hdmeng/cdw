@@ -21,7 +21,7 @@ sys.path.append('./data-server')
 import mapParse as mpp
 import dataParse as dap
 
-from port_split import run_splitter as port_split
+from port_split import forward_packet #F1
 
 # Load environment variables
 load_dotenv()
@@ -272,8 +272,7 @@ def spat_update():
             # Check if the message contains SPaT data
             if (data_1609.get('PSID') == "8002") :
                 # forward to another port for database logging if needed
-                port_split(listen_socket, targets=[("127.0.0.1", 15010)])
-                
+                forward_packet(listen_socket, message, address, [("127.0.0.1", 15010)]) # F1
                 # Process the incoming SPaT message
                 spat_phases = dap.decode_spat(data_1609.get('Payload'), data_1609.get('Spat1_mess'), verbose=False)
         except Exception as e:
