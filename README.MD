@@ -9,13 +9,13 @@ This repository is organized as follows:
 - **`/maps`** - intersection geometry maps of J2735
 - **`/web`** - web-base frontend, html and js
 
-Each directory contains its own README with more detailed information about its contents and structure.
+Each directory will contain its own README with more detailed information about its contents and structure.
 
 ## Run the Backend 
 
 working folder:
 $ cd /home/cdw
-run the bakend process:
+run the backend process:
 $ python3 backend/bkdapp.py > /dev/null 2>&1 &
 
 website: 

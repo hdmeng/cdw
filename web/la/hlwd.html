@@ -41,6 +41,11 @@
         #vmapContent {
             margin-left: 220px; /* Adjust this value based on the width of your sidebar */
         } 
+        .map-container {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
     </style>
     <script>
 
@@ -243,13 +248,20 @@
         </div>
     </div>
     <div id="vmap" class="tab">
-        <div id="sidebar">
-            <ul id="intxnList"></ul>
+        <div style="flex: 1;">
+            <div id="sidebar">
+                <select id="intxnSelect" onchange="selectIntersection(this.value)">
+                    <option value="">Select Intersection</option>
+                </select>
+            </div>
+        </div>    
+        <div id="vmapContent" style="height: 640px; width: 640px;">
+            <div id="mapContainer" class="map-container">                  
+            </div>
         </div>
-        <div id="vmapContent" style="height: 640px; width: 640px;"></div>
     </div>
     <div id="support" class="tab">
-        <a href="download/atcmtd_rsp_09_202411.tar.gz" download>Download Support File</a>
+        <a href="download/xpc_cvloop_26.tar.gz" download>Download Support File</a>
     </div>
 </body>
 </html>

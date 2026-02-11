@@ -180,7 +180,8 @@
             const spatContainer = document.getElementById('spatContainer');
             const mapFileContainer = document.getElementById('mapFileContainer');
             const spatFileContainer = document.getElementById('spatFileContainer');
-            
+            const rspContainer = document.getElementById('rspContainer');
+
             // Handle different view types
             if (viewType === 'MAP') {
                 // Show MAP view
@@ -188,6 +189,7 @@
                 spatContainer.style.display = 'none';
                 mapFileContainer.style.display = 'block';
                 spatFileContainer.style.display = 'none';
+                rspContainer.style.display = 'none';
                 showMapFiles(cv2x.thisIntxn.name);
                 if (window.spatInterval) {
                     clearInterval(window.spatInterval);
@@ -200,6 +202,7 @@
                 spatContainer.style.display = 'block';
                 mapFileContainer.style.display = 'none';
                 spatFileContainer.style.display = 'block';
+                rspContainer.style.display = 'none';
                 showSPATStatus(); // Load initial SPaT status
                 showSpatFiles(cv2x.thisIntxn.name);
                 // Start periodic updates
@@ -211,7 +214,9 @@
                 // Placeholder for RSP view
                 mapContainer.style.display = 'none';
                 spatContainer.style.display = 'none';
-                fileContainer.style.display = 'none';
+                mapFileContainer.style.display = 'none';
+                spatFileContainer.style.display = 'none';
+                rspContainer.style.display = 'block';
                 if (window.spatInterval) {
                     clearInterval(window.spatInterval);
                     window.spatInterval = null;

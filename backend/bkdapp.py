@@ -294,6 +294,16 @@ async def get_spat_files(intxn: str):
 # get RSP status
 @app.get('/api/rsp_state')
 async def get_rsp_status():
+    # get RSP connection status by pinging the RSP
+    try:
+        # Implement your logic to check RSP connection
+        # Ping RSP to check connection
+        command = "ping -c 1 -W 2 192.168.1.108"  # Adjust IP as needed
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result, error = process.communicate()
+        rsp_connected = process.returncode == 0
+    except Exception as e:
+        rsp_connected = False
 
     # Implement your logic to retrieve RSP status
     rsp_status = {
