@@ -246,11 +246,6 @@ async def get_controller_state(rsnode: str):
         sig_state[phase['signalGroup']] = phase['eventState'] 
         spat_state[str(phase['signalGroup'])] = sig_state[phase['signalGroup']]
         
-    # {    "Ph2": sig_state[2], "Ph4": sig_state[4],
-    #     "Ph6": sig_state[6], "Ph8": sig_state[8],
-    #     "Ph10": sig_state[10], "Ph12": sig_state[12],
-    #     "Ph14": sig_state[14], "Ph16": sig_state[16]
-    # }
     return JSONResponse(spat_state)
 
 
@@ -260,7 +255,7 @@ def spat_update():
 
     # Create a UDP socket for listening
     listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    LISTEN_PORT = int(os.getenv('SPAT_LISTEN_PORT', 15009))
+    LISTEN_PORT = int(os.getenv('SPAT_LISTEN_PORT', 15008))
     listen_socket.bind(('', LISTEN_PORT))
 
     while not should_stop.is_set():
@@ -269,6 +264,8 @@ def spat_update():
             data_1609 = json.loads(message.decode('utf-8'))
             # Check if the message contains SPaT data
             if (data_1609.get('PSID') == "8002") :
+                # forward the messages to a minotoring port for debugging
+                # forward_packet(listen_socket, message, address, [("127.0.0.1", 15010)]) 
                 # Process the incoming SPaT message
                 spat_phases = dap.decode_spat(data_1609.get('Payload'), data_1609.get('Spat1_mess'), verbose=False)
         except Exception as e:
@@ -290,6 +287,19 @@ async def get_spat_files(intxn: str):
         "spat_json": spat_json,
     })
     
+# get RSP status
+@app.get('/api/rsp_install')
+async def set_rsp_install():
+    
+    # set RSP connection status by pinging the RSP
+    try:
+        command = "sh rsp_install.sh"  # 
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        result, error = process.communicate()
+    except Exception as e:
+        rsp_installed = False    # 
+   
 
 # get RSP status
 @app.get('/api/rsp_state')
