@@ -13,11 +13,15 @@ Each directory will contain its own README with more detailed information about 
 
 ## Run the Backend 
 
-working folder:
+working folder: 
 $ cd /home/cdw
-run the backend process:
+
+run the backend process: 
 $ python3 backend/bkdapp.py > /dev/null 2>&1 &
 
-website: 
+TMC website: 
+http://127.0.0.1/ecr/ecr.html 
+
+Public Dashboard
 http://128.32.129.118:5080/site/ecr/ecr.html 
 

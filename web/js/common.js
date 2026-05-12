@@ -101,14 +101,16 @@ async function bsmTraj() {
 } */
 
 async function mapValidate(site) {
+    // Fetch map center coordinates from the API
+    const mapCenterResponse = await fetch(`${cv2x._config.SVR_URL}/api/map_center?site=${site}`);
+    const mapCenter = await mapCenterResponse.json();
+    
+    genIntxnList(site);
+
     try {
         // Load the Google Maps API with the fetched API key
-        await loadGoogleMapsAPI();
-            
-        // Fetch map center coordinates from the API
-        const mapCenterResponse = await fetch(`${cv2x._config.SVR_URL}/api/map_center?site=${site}`);
-        const mapCenter = await mapCenterResponse.json();
-        
+        await loadGoogleMapsAPI();        
+          
         // Create the map
         cv2x.map = new google.maps.Map(document.getElementById("mapContainer"), {
             zoom: 19,
@@ -116,7 +118,6 @@ async function mapValidate(site) {
             mapTypeId: 'satellite'
         });
         // cv2x.map.setCenter(mapCenter);
-        genIntxnList(site);
 
     } catch (error) {
         console.error('Error initializing map:', error);
@@ -427,3 +428,38 @@ function toggleSpatUpdates() {
     }
 }
 
+async function installRSP() {
+    // Show installation instructions in the modal
+    const rspInstallContent = document.getElementById('rspInstallOutput');
+    rspInstallContent.style.display = 'block';
+    const text = `
+    Download exec and scripts to the RSP computer...
+    Set the program mode to executable...
+    Set up the processes as a startup service...
+    Enable the service...
+    Start running the processes...
+    `;
+
+    // Create typewriter effect
+    rspInstallContent.innerHTML = '';
+    let index = 0;
+
+    async function typeInstall() {
+        while (index < text.length) {
+            const lineEnd = text.indexOf('\n', index);
+            const nextIndex = lineEnd === -1 ? text.length : lineEnd + 1;
+            rspInstallContent.innerHTML += text.substring(index, nextIndex);
+            rspInstallContent.innerHTML += '<br>'; // Add line break after each line
+            index = nextIndex;
+            index++;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+        
+    }
+
+    typeInstall();
+    
+    const rspInstallStatus = document.getElementById('rspInstallStatus');  
+    rspInstallStatus.textContent = 'Installation Completed ' + new Date().toLocaleString();
+   
+}

@@ -1,0 +1,12 @@
+[Unit]
+Description=RSP MMITSS Script
+After=network.target 
+
+[Service]
+ExecStart=/home/calpath/mrp/scripts/rsp_start.sh &
+ExecStop=/home/calpath/mrp/scripts/rsp_stop.sh 
+Type=simple 
+Restart=on-failure 
+
+[Install]
+WantedBy=default.target 

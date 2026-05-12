@@ -166,6 +166,8 @@
         }
     </style>
     <script>
+        
+        
         // Function to handle sidebar button clicks
         function selectView(viewType) {
             cv2x.viewTab = viewType;
@@ -178,18 +180,23 @@
             
             const mapContainer = document.getElementById('mapContainer');
             const spatContainer = document.getElementById('spatContainer');
+            const rspContainer = document.getElementById('rspContainer');
             const mapFileContainer = document.getElementById('mapFileContainer');
             const spatFileContainer = document.getElementById('spatFileContainer');
-            const rspContainer = document.getElementById('rspContainer');
+            const rspInstallContainer = document.getElementById('rspInstallContainer');
+
+            mapContainer.style.display = 'none';
+            mapFileContainer.style.display = 'none';
+            spatContainer.style.display = 'none';
+            spatFileContainer.style.display = 'none';
+            rspContainer.style.display = 'none';
+            rspInstallContainer.style.display = 'none';
 
             // Handle different view types
             if (viewType === 'MAP') {
                 // Show MAP view
                 mapContainer.style.display = 'block';
-                spatContainer.style.display = 'none';
                 mapFileContainer.style.display = 'block';
-                spatFileContainer.style.display = 'none';
-                rspContainer.style.display = 'none';
                 showMapFiles(cv2x.thisIntxn.name);
                 if (window.spatInterval) {
                     clearInterval(window.spatInterval);
@@ -198,11 +205,8 @@
                 console.log('Switched to MAP view');
             } else if (viewType === 'SPaT') {
                 // Show SPaT view
-                mapContainer.style.display = 'none';
                 spatContainer.style.display = 'block';
-                mapFileContainer.style.display = 'none';
                 spatFileContainer.style.display = 'block';
-                rspContainer.style.display = 'none';
                 showSPATStatus(); // Load initial SPaT status
                 showSpatFiles(cv2x.thisIntxn.name);
                 // Start periodic updates
@@ -212,16 +216,13 @@
                 console.log('Switched to SPaT view');
             } else if (viewType === 'RSP') {
                 // Placeholder for RSP view
-                mapContainer.style.display = 'none';
-                spatContainer.style.display = 'none';
-                mapFileContainer.style.display = 'none';
-                spatFileContainer.style.display = 'none';
                 rspContainer.style.display = 'block';
+                rspInstallContainer.style.display = 'block';
                 if (window.spatInterval) {
                     clearInterval(window.spatInterval);
                     window.spatInterval = null;
                 }
-                console.log('Switched to RSP view - not implemented yet');
+                console.log('Switched to RSP view');
             }
         }
 
@@ -301,6 +302,7 @@
 
         window.onload = function() {
             openTab(null, 'vmap');
+
         }
     </script>
 </head>
@@ -341,8 +343,29 @@
                     </div>
                     <div id="rspContainer" class="rsp-container">
                         <h3>RSP Status</h3>
-                        <div id="rsuStatus">
-                            Loading RSU status...
+                        <div id="rsuStatus" style="font-size: 20px; font-weight: bold;">
+                            <br> -- Configuration -- <br>
+                            IP: 172.168.202.145<br>
+                            Part: 17022<br>
+                            Status: <span style="color: green;">Connected</span><br>
+                            <br> -- Software and Data Standard Version -- <br>
+                            Ubuntu: Server 22.04 <br>
+                            CTSCP: 3.10 build 15 <br>
+                            MMITSS: 202509 <br>
+                            SAE J2735: 202409 <br>
+                            RSU Firmware: Yunex 2.2.37 <br>
+                            <br> -- Interface -- <br>
+                            RSU: <span style="color: green;">Connected; </span>
+                            <span style="color: red;">Data Communicating; </span><br>
+                            TSC: <span style="color: green;">Connected;  Data Receiving; </span><br>
+                            <br> -- Functions -- <br>
+                            SPaT Decoding and Encoding: <span style="color: green;">ON</span><br>
+                            SPaT Forwarding: <span style="color: green;">ON</span><br>
+                            MAP Decoding: <span style="color: gray;">OFF</span><br>
+                            BSM Receiving: <span style="color: gray;">OFF</span><br>
+                            BSM Tracking: <span style="color: gray;">OFF</span><br>
+                            Signal Priority Application: <span style="color: gray;">OFF</span><br>
+                            <br>
                         </div>
                     </div>    
                 </div>
@@ -387,6 +410,15 @@
                             <a href="#" id="spatJson" class="downloadlink" download>
                                 SPaT JSON (last updated)
                             </a><br>    
+                        </div>
+                    </div>
+                    <!-- RSP Installation Container -->
+                    <div id="rspInstallContainer" class="map-container">
+                        <h3>RSP Installation</h3>
+                        <button onclick="installRSP()">Install RSP</button>
+                        <textarea id="rspInstallStatus" readonly style="width: 100%; height: 20px; margin-top: 10px; overflow-y: auto; resize: horizontal; font-family: monospace; border: 0px;"></textarea>
+                        <div id="rspInstallOutput" style="margin-top: 15px; padding: 10px; background-color: #333; color: white; font-family: monospace; max-height: 300px; overflow-y: auto; border-radius: 4px; white-space: pre-wrap; display: none;">
+
                         </div>
                     </div>
                 </div>
