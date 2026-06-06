@@ -153,16 +153,14 @@
         .upload-section button:hover {
             background-color: #0d3a5c;
         }
-        #payloadResult {
-            margin-top: 15px;
-            padding: 10px;
-            background-color: #333;
-            color: white;
-            white-space: pre-wrap;
-            font-family: monospace;
-            max-height: 300px;
+        .payloadText {
+            white-space: pre-wrap; 
+            background-color: #333; 
+            color: white; 
+            padding: 10px; 
+            margin-top: 10px; 
+            max-height: 200px; 
             overflow-y: auto;
-            border-radius: 4px;
         }
     </style>
     <script>
@@ -226,28 +224,56 @@
             }
         }
 
+        function textToBase64(text) {
+            const bytes = new TextEncoder().encode(text);
+            let binary = '';
+
+            bytes.forEach(byte => {
+                binary += String.fromCharCode(byte);
+            });
+
+            return btoa(binary);
+        }
+
         // Function to upload and process payload file
         async function uploadPayload() {
             const fileInput = document.getElementById('payloadUpload');
-            const resultDiv = document.getElementById('payloadResult');
+            const resultDiv = document.getElementById('revisingResult');
+            const revPayload = document.getElementById('revPayload');
+            const origPayloadLen = document.getElementById('origPayloadLen');
+            const revPayloadLen = document.getElementById('revPayloadLen');
             
-            if (!fileInput.files[0]) {
-                resultDiv.textContent = 'Please select a file to upload.';
+            // get the hex input from textarea
+            const hexInput = document.getElementById('hexInput').value;
+            const hasHexInput = hexInput.trim() !== '';
+
+            if (!hasHexInput && !fileInput.files[0]) {
+                resultDiv.textContent = 'Please provide hex input or select a file to upload.';
+                resultDiv.style.color = 'red';
                 return;
             }
             
+            let base64Content = null;
             const file = fileInput.files[0];
-            
+
             try {
-                resultDiv.textContent = 'Processing...';
+                resultDiv.style.color = 'white';
+                resultDiv.textContent = 'Processing...' + (hasHexInput ? ' (using hex input)' : '(using file upload)');
                 
                 // Read file as base64
-                const base64Content = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result.split(',')[1]); // Remove data: prefix
-                    reader.onerror = reject;
-                    reader.readAsDataURL(file);
-                });
+                if (!hasHexInput && file) {
+                    base64Content = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result.split(',')[1]); // Remove data: prefix
+                        reader.onerror = reject;
+                        reader.readAsDataURL(file);
+                    });
+                } else {
+                    // Match file uploads by base64-encoding the entered text content directly.
+                    base64Content = textToBase64(hexInput);
+                    // console.log('base64 value from hex input:', base64Content);
+                }
+                
                 
                 // Send as JSON instead of FormData
                 const response = await fetch(`${cv2x._config.SVR_URL}/api/process_map_payload`, {
@@ -256,7 +282,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        filename: file.name,
+                        filename: file ? file.name : 'tmp.payload',
                         content: base64Content
                     })
                 });
@@ -267,12 +293,19 @@
                 
                 const result = await response.json();
                 
-                // Display the processed result
-                resultDiv.textContent = JSON.stringify(result, null, 2);
+                // Display the processed result and the revised payload length
+                origPayloadLen.textContent = result.map_payload_org_size;
+                revPayloadLen.textContent = result.map_payload_rev_size;
+                revPayload.textContent = result.map_payload_rev;
+                resultDiv.textContent = result.duplicate_lanes.length > 0 ? 
+                    `Duplicate lane IDs found and removed: ${result.duplicate_lanes.join(', ')}` : 
+                    'No duplicate lane IDs found.';
+                //resultDiv.textContent = JSON.stringify(result, null, 2);
+                
                 
             } catch (error) {
                 console.error('Upload failed:', error);
-                resultDiv.textContent = `Error processing payload: ${error.message}`;
+                revPayload.textContent = `Error processing payload: ${error.message}`;
             }
         }
 
@@ -310,7 +343,7 @@
     <div>
         <span class="tab-links" onclick="openTab(event, 'facility')">Facility</span>
         <span class="tab-links active" onclick="openTab(event, 'vmap')">Intersections</span>
-        <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
+        <span class="tab-links" onclick="openTab(event, 'support')">Support Tools</span>
     </div>
     <div id="bsm" class="tab active">
         <div id="bsmContent" style="height: 600px; width: 80%;"></div>
@@ -376,9 +409,9 @@
                     <div id="mapFileContainer" class="map-container">
                         <h3>MAP Validation</h3>
                         <!-- <div id="mapFileList"></div> -->
-                        <div id="mapPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
-                    
-                        <textarea id="mapJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
+                        <div id="mapPayloadContent" class="payloadText"></div>
+                        <div id="mapJsonContent" readonly class="payloadText"></div>
+                        
                         <div style="margin-top: 20px;">
                             <h3>Download Files</h3>
                             <a href="#" id="mapPayload" class="downloadlink">
@@ -399,9 +432,9 @@
                     <div id="spatFileContainer" class="map-container">
                         <h3>SPaT Validation</h3>
                         <!-- <div id="mapFileList"></div> -->
-                        <div id="spatPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
-                    
-                        <textarea id="spatJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
+                        <div id="spatPayloadContent" class="payloadText"></div>
+                        <div id="spatJsonContent" readonly class="payloadText"></div>
+
                         <div style="margin-top: 20px;">
                             <h3>Download Files</h3>
                             <a href="#" id="spatPayload" class="downloadlink">
@@ -427,12 +460,22 @@
     </div>
     <div id="support" class="tab">
         <div class="upload-section">
-            <h3>Payload Revision</h3>
-            <p>Upload a MAP payload file (.payload) to process and revise it:</p>
-            <input type="file" id="payloadUpload" accept=".payload">
+            <h3>Payload Validation and Revision</h3>
+            <label for="hexInput">Hex Payload Values:</label> <br>
+            <textarea id="hexInput" style="width: 50%; height: 100px; margin: 10px 0; padding: 8px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px;"></textarea>
             <br>
-            <button onclick="uploadPayload()">Upload and Process</button>
-            <div id="payloadResult"></div>
+            <p>OR Upload a MAP payload file (.payload):</p>
+            <input type="file" id="payloadUpload" accept=".payload">
+            <tab></tab><button onclick="uploadPayload()">Upload and Process</button>
+            <br> <br> 
+            <p>Validation Summary: </p>
+            <div id="revisingResult" class="payloadText" style="width: 50%;"></div>
+            <p>Original Payload Length: </p>
+            <div id="origPayloadLen" class="payloadText" style="width: 50%;"></div>
+            <p>Revised Payload: </p>
+            <div id="revPayload" class="payloadText" style="width: 50%;"></div>
+            <p>Revised Payload Length: </p>
+            <div id="revPayloadLen" class="payloadText" style="width: 50%;"></div>
         </div>
         
         <div style="margin-top: 20px;">

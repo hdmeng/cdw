@@ -133,7 +133,7 @@ async def get_map_files(intxn: str):
         map_payload_str = ' '.join(map_payload_hex[i:i+2] for i in range(0, len(map_payload_hex), 2))
         map_json_raw, map_json, _ = mpp.MAP_payload_to_json(map_payload)
         # eliminate duplicate lanes and convert back to payload
-        map_payload_rev = mpp.MAP_json_to_payload(map_json_raw, True)
+        map_payload_rev, _ = mpp.MAP_json_to_payload(map_json_raw, True)
         return JSONResponse({
             "map_payload_bytes": map_payload_str,
             "map_json": map_json,
@@ -180,12 +180,15 @@ async def process_map_payload(request: Request):
             map_json_raw, map_json, _ = mpp.MAP_payload_to_json(map_payload)
             
             # Eliminate duplicate lanes and convert back to payload
-            map_payload_rev = mpp.MAP_json_to_payload(map_json_raw, elim_dupl_lanes=True)
+            map_payload_rev, dupl_lanes = mpp.MAP_json_to_payload(map_json_raw, elim_dupl_lanes=True)
             
             return JSONResponse({
+                "map_payload_org": map_payload.hex().upper(),
+                "map_payload_org_size": len(map_payload),
                 "map_payload_rev": map_payload_rev.hex().upper(),
                 "map_payload_rev_size": len(map_payload_rev),
                 "map_json": map_json,
+                "duplicate_lanes": dupl_lanes,
             })
         except Exception as e:
             return JSONResponse({"error": f"Failed to process payload: {str(e)}"}, status_code=500)
