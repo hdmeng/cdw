@@ -281,7 +281,7 @@
                 
                 const intervalId = setInterval(async () => {
                 // Replace with your API call
-                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/tsc_state?rsnode=rfs-coin`)
+                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/tsc_state?intxnid=1000`)
                         .then(response => response.json())
                         .then(data => {
                             const ctrlStatus = document.getElementById('ctrlStatus');

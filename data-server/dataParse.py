@@ -70,6 +70,7 @@ def decode_spat(hex_str, intvl_str, verbose=False):
     intvl_strs = [IntvlText.get(int(code), 'UNKNOWN') for code in intvl_codes]
 
     # Extract timing for each signal group
+    intxn_phases = {}
     phases = []
     for intersection in spat_data['intersections']:
         for movement in intersection['states']:
@@ -102,7 +103,10 @@ def decode_spat(hex_str, intvl_str, verbose=False):
             print(f"{intvl_str.split(';')[0]}; {intvl_strs[0]}, {intvl_strs[1]}" , end='\n')
             #print('')  # New line 
 
-    return phases
+        intxn_phases['id'] = intersection.get('id')
+        intxn_phases['phases'] = phases
+    
+    return intxn_phases
 
 # function to parse the BSM message
 def parse_bsm(payload, withMsgFrame=False):

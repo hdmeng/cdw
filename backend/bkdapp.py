@@ -106,8 +106,9 @@ async def get_intxns(site: str):
     for intxn_name in maps_hex.keys():
         map_payload = maps_hex[intxn_name]
         _, _, intxn_json[intxn_name] = mpp.MAP_payload_to_json(map_payload)
+        intxn_id = intxn_json[intxn_name].get('id', {}).get('id', 'unknown')
         intxn_center = mpp.get_intersection_center(intxn_json[intxn_name])
-        intxn_list.append({"name": intxn_name, "center": intxn_center})
+        intxn_list.append({"name": intxn_name, "id": intxn_id, "center": intxn_center})
     return JSONResponse(intxn_list)
 
 # set lanes for the given intersection
@@ -234,17 +235,18 @@ async def get_rsu_state(rsnode: str):
 should_stop = threading.Event()
 
 # Global variable to hold SPaT timings
-spat_phases = []
+spat_phases = {}
 
 # get Controller state based on SPaT updates, e.g. /api/tsc_state?rsnode=ecr-pgml
 @app.get('/api/tsc_state')
-async def get_controller_state(rsnode: str):
+async def get_controller_state(intxnid: int):
     global spat_phases
     sig_state = ['G','R','R','R','R','R','R','R'
             ,'R','R','R','R','R','R','R','R','R']  # Default signal states
     
     spat_state = {}
-    for phase in spat_phases:
+    phases = spat_phases[intxnid] if intxnid in spat_phases else []
+    for phase in phases:
         # print(f"SPaT Phase: {phase}")
         sig_state[phase['signalGroup']] = phase['eventState'] 
         spat_state[str(phase['signalGroup'])] = sig_state[phase['signalGroup']]
@@ -270,7 +272,10 @@ def spat_update():
                 # forward the messages to a minotoring port for debugging
                 # forward_packet(listen_socket, message, address, [("127.0.0.1", 15010)]) 
                 # Process the incoming SPaT message
-                spat_phases = dap.decode_spat(data_1609.get('Payload'), data_1609.get('Spat1_mess'), verbose=False)
+                spat_ph = dap.decode_spat(data_1609.get('Payload'), data_1609.get('Spat1_mess'), verbose=False)
+                # append diffrent intersectin id to the spat_phases
+                #for intersection_id, phases in spat_phases.items():
+                spat_phases[spat_ph['id'].get('id')] = spat_ph['phases']
         except Exception as e:
             print(f"Error in SPaT update: {e}")
     

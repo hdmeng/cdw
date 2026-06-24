@@ -349,7 +349,7 @@ async function showMapFiles(intxnName) {
 // Function to show SPaT status with scrolling text
 async function showSPATStatus() {
     try {
-        const response = await fetch(`${cv2x._config.SVR_URL}/api/tsc_state?rsnode=${cv2x.thisIntxn.name}`);
+        const response = await fetch(`${cv2x._config.SVR_URL}/api/tsc_state?intxnid=${cv2x.thisIntxn.id}`);
         const tscState = await response.json();
         const spatUpdates = document.getElementById('spatUpdates');
         
