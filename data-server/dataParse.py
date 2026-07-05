@@ -7,7 +7,7 @@ from tabnanny import verbose
 import argparse  # Import the argparse module
 
 # Load the compiled ASN.1 specification from a file
-with open('./J2735Common/pkl/j2735_spec_2.pkl', 'rb') as f:
+with open('./J2735Common/pkl/j2735_spec_2024.pkl', 'rb') as f:
     j2735_spec = pickle.load(f)
 
 # color mapping for signal states
@@ -65,10 +65,12 @@ def decode_spat(hex_str, intvl_str, verbose=False):
     spat_data = j2735_spec.decode('SPAT', msgFrame_data.get('value'))
 
     # get interval meanings from intvl_str: 10001000;1,1
+    intvl_str = '10001000;1,1' if intvl_str is None else intvl_str
     intvl_codes = intvl_str.split(';')[1].split(',')
     intvl_strs = [IntvlText.get(int(code), 'UNKNOWN') for code in intvl_codes]
 
     # Extract timing for each signal group
+    intxn_phases = {}
     phases = []
     for intersection in spat_data['intersections']:
         for movement in intersection['states']:
@@ -101,7 +103,10 @@ def decode_spat(hex_str, intvl_str, verbose=False):
             print(f"{intvl_str.split(';')[0]}; {intvl_strs[0]}, {intvl_strs[1]}" , end='\n')
             #print('')  # New line 
 
-    return phases
+        intxn_phases['id'] = intersection.get('id')
+        intxn_phases['phases'] = phases
+    
+    return intxn_phases
 
 # function to parse the BSM message
 def parse_bsm(payload, withMsgFrame=False):
@@ -133,7 +138,7 @@ def parse_bsm(payload, withMsgFrame=False):
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description='Process MAP payload and draw intersection geometry.')
-    parser.add_argument('-S', '--spat', action='store_true', help='Enable verbose output')
+    parser.add_argument('-S', '--spat', action='store_true', help='for SPaT parsing')
     parser.add_argument('-B', '--bsm', action='store_true', help='Enable figure plotting')
     parser.add_argument('-l', '--listenPort', type=int, help='Specify the port number', default=15003)
 

@@ -21,8 +21,6 @@ sys.path.append('./data-server')
 import mapParse as mpp
 import dataParse as dap
 
-from port_split import forward_packet #F1
-
 # Load environment variables
 load_dotenv()
 
@@ -108,8 +106,9 @@ async def get_intxns(site: str):
     for intxn_name in maps_hex.keys():
         map_payload = maps_hex[intxn_name]
         _, _, intxn_json[intxn_name] = mpp.MAP_payload_to_json(map_payload)
+        intxn_id = intxn_json[intxn_name].get('id', {}).get('id', 'unknown')
         intxn_center = mpp.get_intersection_center(intxn_json[intxn_name])
-        intxn_list.append({"name": intxn_name, "center": intxn_center})
+        intxn_list.append({"name": intxn_name, "id": intxn_id, "center": intxn_center})
     return JSONResponse(intxn_list)
 
 # set lanes for the given intersection
@@ -135,7 +134,7 @@ async def get_map_files(intxn: str):
         map_payload_str = ' '.join(map_payload_hex[i:i+2] for i in range(0, len(map_payload_hex), 2))
         map_json_raw, map_json, _ = mpp.MAP_payload_to_json(map_payload)
         # eliminate duplicate lanes and convert back to payload
-        map_payload_rev = mpp.MAP_json_to_payload(map_json_raw, True)
+        map_payload_rev, _ = mpp.MAP_json_to_payload(map_json_raw, True)
         return JSONResponse({
             "map_payload_bytes": map_payload_str,
             "map_json": map_json,
@@ -182,12 +181,15 @@ async def process_map_payload(request: Request):
             map_json_raw, map_json, _ = mpp.MAP_payload_to_json(map_payload)
             
             # Eliminate duplicate lanes and convert back to payload
-            map_payload_rev = mpp.MAP_json_to_payload(map_json_raw, elim_dupl_lanes=True)
+            map_payload_rev, dupl_lanes = mpp.MAP_json_to_payload(map_json_raw, elim_dupl_lanes=True)
             
             return JSONResponse({
+                "map_payload_org": map_payload.hex().upper(),
+                "map_payload_org_size": len(map_payload),
                 "map_payload_rev": map_payload_rev.hex().upper(),
                 "map_payload_rev_size": len(map_payload_rev),
                 "map_json": map_json,
+                "duplicate_lanes": dupl_lanes,
             })
         except Exception as e:
             return JSONResponse({"error": f"Failed to process payload: {str(e)}"}, status_code=500)
@@ -233,26 +235,22 @@ async def get_rsu_state(rsnode: str):
 should_stop = threading.Event()
 
 # Global variable to hold SPaT timings
-spat_phases = []
+spat_phases = {}
 
 # get Controller state based on SPaT updates, e.g. /api/tsc_state?rsnode=ecr-pgml
 @app.get('/api/tsc_state')
-async def get_controller_state(rsnode: str):
+async def get_controller_state(intxnid: int):
     global spat_phases
     sig_state = ['G','R','R','R','R','R','R','R'
             ,'R','R','R','R','R','R','R','R','R']  # Default signal states
     
     spat_state = {}
-    for phase in spat_phases:
+    phases = spat_phases[intxnid] if intxnid in spat_phases else []
+    for phase in phases:
         # print(f"SPaT Phase: {phase}")
         sig_state[phase['signalGroup']] = phase['eventState'] 
         spat_state[str(phase['signalGroup'])] = sig_state[phase['signalGroup']]
         
-    # {    "Ph2": sig_state[2], "Ph4": sig_state[4],
-    #     "Ph6": sig_state[6], "Ph8": sig_state[8],
-    #     "Ph10": sig_state[10], "Ph12": sig_state[12],
-    #     "Ph14": sig_state[14], "Ph16": sig_state[16]
-    # }
     return JSONResponse(spat_state)
 
 
@@ -262,7 +260,7 @@ def spat_update():
 
     # Create a UDP socket for listening
     listen_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    LISTEN_PORT = int(os.getenv('SPAT_LISTEN_PORT', 15009))
+    LISTEN_PORT = int(os.getenv('SPAT_LISTEN_PORT', 15008))
     listen_socket.bind(('', LISTEN_PORT))
 
     while not should_stop.is_set():
@@ -271,10 +269,13 @@ def spat_update():
             data_1609 = json.loads(message.decode('utf-8'))
             # Check if the message contains SPaT data
             if (data_1609.get('PSID') == "8002") :
-                # forward to another port for database logging if needed
-                forward_packet(listen_socket, message, address, [("127.0.0.1", 15010)]) # F1
+                # forward the messages to a minotoring port for debugging
+                # forward_packet(listen_socket, message, address, [("127.0.0.1", 15010)]) 
                 # Process the incoming SPaT message
-                spat_phases = dap.decode_spat(data_1609.get('Payload'), data_1609.get('Spat1_mess'), verbose=False)
+                spat_ph = dap.decode_spat(data_1609.get('Payload'), data_1609.get('Spat1_mess'), verbose=False)
+                # append diffrent intersectin id to the spat_phases
+                #for intersection_id, phases in spat_phases.items():
+                spat_phases[spat_ph['id'].get('id')] = spat_ph['phases']
         except Exception as e:
             print(f"Error in SPaT update: {e}")
     
@@ -294,10 +295,33 @@ async def get_spat_files(intxn: str):
         "spat_json": spat_json,
     })
     
+# get RSP status
+@app.get('/api/rsp_install')
+async def set_rsp_install():
+    
+    # set RSP connection status by pinging the RSP
+    try:
+        command = "sh rsp_install.sh"  # 
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        
+        result, error = process.communicate()
+    except Exception as e:
+        rsp_installed = False    # 
+   
 
 # get RSP status
 @app.get('/api/rsp_state')
 async def get_rsp_status():
+    # get RSP connection status by pinging the RSP
+    try:
+        # Implement your logic to check RSP connection
+        # Ping RSP to check connection
+        command = "ping -c 1 -W 2 192.168.1.108"  # Adjust IP as needed
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result, error = process.communicate()
+        rsp_connected = process.returncode == 0
+    except Exception as e:
+        rsp_connected = False
 
     # Implement your logic to retrieve RSP status
     rsp_status = {

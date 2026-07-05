@@ -115,6 +115,7 @@ def MAP_json_to_payload(mapData_json_raw, elim_dupl_lanes=True):
         # eliminate duplicate lanes based on laneID
         lane_ids = set()
         unique_intersections = []
+        dupl_lanes = []
         for intxn in mapData_json_raw.get("intersections", []):
             unique_lanes = []
             for lane in intxn.get("laneSet", []):
@@ -122,6 +123,8 @@ def MAP_json_to_payload(mapData_json_raw, elim_dupl_lanes=True):
                 if lane_id not in lane_ids:
                     lane_ids.add(lane_id)
                     unique_lanes.append(lane)
+                else:
+                    dupl_lanes.append(lane_id)
             intxn["laneSet"] = unique_lanes
             unique_intersections.append(intxn)
         mapData_json_raw["intersections"] = unique_intersections
@@ -138,7 +141,7 @@ def MAP_json_to_payload(mapData_json_raw, elim_dupl_lanes=True):
     # Encode the MessageFrame structure using the ASN.1 specification
     messageFrame_payload = j2735_spec.encode("MessageFrame", messageFrame_struct)
 
-    return messageFrame_payload
+    return messageFrame_payload, dupl_lanes
 
 # Define a function to get the intersection center
 def get_intersection_center(intxn):
