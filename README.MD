@@ -19,6 +19,12 @@ $ cd /home/cdw
 run the backend process: 
 $ python3 backend/bkdapp.py > /dev/null 2>&1 &
 
+or manage it as a user service:
+$ bash backend/bkdapp_start.sh
+
+stop the backend service:
+$ bash backend/bkdapp_stop.sh
+
 TMC website: 
 http://127.0.0.1/ecr/ecr.html 
 

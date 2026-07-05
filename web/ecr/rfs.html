@@ -74,6 +74,8 @@
         let mapsScriptLoaded = false;
         let map3dElement;
         let map;
+        let cameraMap;
+        let cameraMarkers = [];
         let vmap_notloaded = true;
 
         const lineColor = {
@@ -281,7 +283,7 @@
                 
                 const intervalId = setInterval(async () => {
                 // Replace with your API call
-                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/tsc_state?rsnode=rfs-coin`)
+                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/tsc_state?intxnid=1000`)
                         .then(response => response.json())
                         .then(data => {
                             const ctrlStatus = document.getElementById('ctrlStatus');
@@ -375,6 +377,81 @@
             }
         }
 
+        async function renderCameraMap() {
+            try {
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    await loadGMPsAPI();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/viz_cameras`);
+                if (!response.ok) {
+                    throw new Error(`Camera API returned ${response.status}`);
+                }
+
+                const cameras = await response.json();
+                const cameraCount = document.getElementById('cameraCount');
+                const mapContainer = document.getElementById('cameraMapContent');
+
+                if (!cameraMap) {
+                    cameraMap = new google.maps.Map(mapContainer, {
+                        zoom: 12,
+                        center: { lat: 37.915572, lng: -122.334873 },
+                        mapTypeId: 'roadmap'
+                    });
+                }
+
+                cameraMarkers.forEach(marker => marker.setMap(null));
+                cameraMarkers = [];
+
+                const bounds = new google.maps.LatLngBounds();
+                const infoWindow = new google.maps.InfoWindow();
+
+                cameras.forEach(camera => {
+                    const marker = new google.maps.Marker({
+                        position: { lat: camera.lat, lng: camera.lng },
+                        map: cameraMap,
+                        title: camera.name,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            fillColor: camera.out_of_service ? '#9ca3af' : '#165391',
+                            fillOpacity: 1,
+                            scale: 6,
+                            strokeColor: '#ffffff',
+                            strokeWeight: 2
+                        }
+                    });
+
+                    marker.addListener('click', () => {
+                        infoWindow.setContent(`
+                            <div style="min-width:220px; line-height:1.5;">
+                                <strong>${camera.name}</strong><br>
+                                Camera ID: ${camera.camera_id || 'n/a'}<br>
+                                Region: ${camera.region_id || 'n/a'}<br>
+                                View: ${camera.view || 'n/a'}<br>
+                                Closest Lane: ${camera.closest_lane || 'n/a'}<br>
+                                Marker Post: ${camera.marker_post || 'n/a'}<br>
+                                Status: ${camera.out_of_service ? 'Out of service' : 'Active'}
+                            </div>
+                        `);
+                        infoWindow.open(cameraMap, marker);
+                    });
+
+                    cameraMarkers.push(marker);
+                    bounds.extend(marker.getPosition());
+                });
+
+                cameraCount.textContent = `${cameras.length} camera locations loaded from CamerasInPolygon.xml`;
+
+                if (cameras.length > 0) {
+                    cameraMap.fitBounds(bounds, 40);
+                }
+            } catch (error) {
+                console.error('Error rendering camera map:', error);
+                document.getElementById('cameraCount').textContent = `Failed to load camera locations: ${error.message}`;
+            }
+        }
+
         // Open the specified tab
         async function openTab(event, tabName) {
             const tabs = document.querySelectorAll('.tab');
@@ -394,6 +471,8 @@
                 // socket.off('marker_update');
                 
                 await mapValidate();
+            } else if (tabName === 'cameraMap') {
+                await renderCameraMap();
             } else if (tabName === 'bsm') {
                 // socket.off('rsu_state');
 
@@ -420,6 +499,7 @@
     <div>
         <span class="tab-links active" onclick="openTab(event, 'scene')">Test Scene</span>
         <span class="tab-links" onclick="openTab(event, 'vmap')">System Dashboard</span>
+        <span class="tab-links" onclick="openTab(event, 'cameraMap')">Camera Map</span>
         <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
         <div style="position: absolute; top: 10px; right: 10px; background-color: #f1f1f1; padding: 10px; border: 1px solid #ccc;" id="dateTimeBox">
             Loading date and time...
@@ -515,6 +595,14 @@
                         <p>Multi-Access Edge Computing states information will be displayed here.</p>
                     </div>
             </div>
+        </div>
+    </div>
+    <div id="cameraMap" class="tab">
+        <div style="padding: 16px;">
+            <div id="cameraCount" class="state-box" style="margin-bottom: 16px; color: #0f172a; background-color: #f8fafc;">
+                Loading camera locations...
+            </div>
+            <div id="cameraMapContent" style="height: 720px; width: 100%; border: 2px solid #165391;"></div>
         </div>
     </div>
     <div id="support" class="tab">

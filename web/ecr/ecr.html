@@ -3,7 +3,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>intxn V2X Applications Demo</title>
+    <title>El-Camino-Real V2X Corridor</title>
+    <link rel="icon" href="data:,">
     <script src="../js/common.js"></script>
     
     <style>
@@ -153,41 +154,52 @@
         .upload-section button:hover {
             background-color: #0d3a5c;
         }
-        #payloadResult {
-            margin-top: 15px;
-            padding: 10px;
-            background-color: #333;
-            color: white;
-            white-space: pre-wrap;
-            font-family: monospace;
-            max-height: 300px;
+        .payloadText {
+            white-space: pre-wrap; 
+            background-color: #333; 
+            color: white; 
+            padding: 10px; 
+            margin-top: 10px; 
+            max-height: 200px; 
             overflow-y: auto;
-            border-radius: 4px;
         }
     </style>
     <script>
+        
+		function initialView() {
+			// Set default view to MAP
+			const mapContainer = document.getElementById('mapContainer');
+			const spatContainer = document.getElementById('spatContainer');
+			const rspContainer = document.getElementById('rspContainer');
+			const mapFileContainer = document.getElementById('mapFileContainer');
+			const spatFileContainer = document.getElementById('spatFileContainer');
+			const rspInstallContainer = document.getElementById('rspInstallContainer');
+			mapContainer.style.display = 'none';
+			mapFileContainer.style.display = 'none';
+			spatContainer.style.display = 'none';
+			spatFileContainer.style.display = 'none';
+			rspContainer.style.display = 'none';
+			rspInstallContainer.style.display = 'none';
+		}
+
         // Function to handle sidebar button clicks
         function selectView(viewType) {
+			initialView();
+
             cv2x.viewTab = viewType;
             // Remove active class from all buttons
             const buttons = document.querySelectorAll('.sidebar-button');
             buttons.forEach(btn => btn.classList.remove('active'));
             
             // Add active class to clicked button
-            event.target.classList.add('active');
-            
-            const mapContainer = document.getElementById('mapContainer');
-            const spatContainer = document.getElementById('spatContainer');
-            const mapFileContainer = document.getElementById('mapFileContainer');
-            const spatFileContainer = document.getElementById('spatFileContainer');
-            
+            if (event && event.target) {
+            }
+
             // Handle different view types
             if (viewType === 'MAP') {
                 // Show MAP view
                 mapContainer.style.display = 'block';
-                spatContainer.style.display = 'none';
                 mapFileContainer.style.display = 'block';
-                spatFileContainer.style.display = 'none';
                 showMapFiles(cv2x.thisIntxn.name);
                 if (window.spatInterval) {
                     clearInterval(window.spatInterval);
@@ -196,9 +208,7 @@
                 console.log('Switched to MAP view');
             } else if (viewType === 'SPaT') {
                 // Show SPaT view
-                mapContainer.style.display = 'none';
                 spatContainer.style.display = 'block';
-                mapFileContainer.style.display = 'none';
                 spatFileContainer.style.display = 'block';
                 showSPATStatus(); // Load initial SPaT status
                 showSpatFiles(cv2x.thisIntxn.name);
@@ -209,39 +219,66 @@
                 console.log('Switched to SPaT view');
             } else if (viewType === 'RSP') {
                 // Placeholder for RSP view
-                mapContainer.style.display = 'none';
-                spatContainer.style.display = 'none';
-                fileContainer.style.display = 'none';
+                rspContainer.style.display = 'block';
+                rspInstallContainer.style.display = 'block';
                 if (window.spatInterval) {
                     clearInterval(window.spatInterval);
                     window.spatInterval = null;
                 }
-                console.log('Switched to RSP view - not implemented yet');
+                console.log('Switched to RSP view');
             }
+        }
+
+        function textToBase64(text) {
+            const bytes = new TextEncoder().encode(text);
+            let binary = '';
+
+            bytes.forEach(byte => {
+                binary += String.fromCharCode(byte);
+            });
+
+            return btoa(binary);
         }
 
         // Function to upload and process payload file
         async function uploadPayload() {
             const fileInput = document.getElementById('payloadUpload');
-            const resultDiv = document.getElementById('payloadResult');
+            const resultDiv = document.getElementById('revisingResult');
+            const revPayload = document.getElementById('revPayload');
+            const origPayloadLen = document.getElementById('origPayloadLen');
+            const revPayloadLen = document.getElementById('revPayloadLen');
             
-            if (!fileInput.files[0]) {
-                resultDiv.textContent = 'Please select a file to upload.';
+            // get the hex input from textarea
+            const hexInput = document.getElementById('hexInput').value;
+            const hasHexInput = hexInput.trim() !== '';
+
+            if (!hasHexInput && !fileInput.files[0]) {
+                resultDiv.textContent = 'Please provide hex input or select a file to upload.';
+                resultDiv.style.color = 'red';
                 return;
             }
             
+            let base64Content = null;
             const file = fileInput.files[0];
-            
+
             try {
-                resultDiv.textContent = 'Processing...';
+                resultDiv.style.color = 'white';
+                resultDiv.textContent = 'Processing...' + (hasHexInput ? ' (using hex input)' : '(using file upload)');
                 
                 // Read file as base64
-                const base64Content = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result.split(',')[1]); // Remove data: prefix
-                    reader.onerror = reject;
-                    reader.readAsDataURL(file);
-                });
+                if (!hasHexInput && file) {
+                    base64Content = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result.split(',')[1]); // Remove data: prefix
+                        reader.onerror = reject;
+                        reader.readAsDataURL(file);
+                    });
+                } else {
+                    // Match file uploads by base64-encoding the entered text content directly.
+                    base64Content = textToBase64(hexInput);
+                    // console.log('base64 value from hex input:', base64Content);
+                }
+                
                 
                 // Send as JSON instead of FormData
                 const response = await fetch(`${cv2x._config.SVR_URL}/api/process_map_payload`, {
@@ -250,7 +287,7 @@
                         'Content-Type': 'application/json'
                     },
                     body: JSON.stringify({
-                        filename: file.name,
+                        filename: file ? file.name : 'tmp.payload',
                         content: base64Content
                     })
                 });
@@ -261,12 +298,19 @@
                 
                 const result = await response.json();
                 
-                // Display the processed result
-                resultDiv.textContent = JSON.stringify(result, null, 2);
+                // Display the processed result and the revised payload length
+                origPayloadLen.textContent = result.map_payload_org_size;
+                revPayloadLen.textContent = result.map_payload_rev_size;
+                revPayload.textContent = result.map_payload_rev;
+                resultDiv.textContent = result.duplicate_lanes.length > 0 ? 
+                    `Duplicate lane IDs found and removed: ${result.duplicate_lanes.join(', ')}` : 
+                    'No duplicate lane IDs found.';
+                //resultDiv.textContent = JSON.stringify(result, null, 2);
+                
                 
             } catch (error) {
                 console.error('Upload failed:', error);
-                resultDiv.textContent = `Error processing payload: ${error.message}`;
+                revPayload.textContent = `Error processing payload: ${error.message}`;
             }
         }
 
@@ -281,7 +325,12 @@
             document.getElementById(tabName).classList.add('active');
             if (event) {
                 event.currentTarget.classList.add('active');
+            } else {
+                const matchingLink = document.querySelector(`.tab-links[onclick*="'${tabName}'"]`);
+                if (matchingLink) matchingLink.classList.add('active');
             }
+
+            localStorage.setItem('activeTab', tabName);
 
             // Call the appropriate function based on the tab name
             if (tabName === 'vmap') {
@@ -289,21 +338,25 @@
                 // Set MAP as default active button
                 document.querySelector('.sidebar-button[data-view="MAP"]').classList.add('active');
                 // startTSCUpdates(); // Start TSC updates when vmap tab is opened
+				selectView('MAP'); // Initialize the view to MAP
             } else if (tabName === 'facility') {
                 bsmTraj();
             }
         }
 
         window.onload = function() {
-            openTab(null, 'vmap');
+            const savedTab = localStorage.getItem('activeTab');
+            const validTabs = ['facility', 'vmap', 'support'];
+            const tabToOpen = (savedTab && validTabs.includes(savedTab)) ? savedTab : 'vmap';
+            openTab(null, tabToOpen);
         }
     </script>
 </head>
 <body>
     <div>
         <span class="tab-links" onclick="openTab(event, 'facility')">Facility</span>
-        <span class="tab-links active" onclick="openTab(event, 'vmap')">Intersections</span>
-        <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
+		<span class="tab-links active" onclick="openTab(event, 'vmap')">Intersections</span>
+        <span class="tab-links" onclick="openTab(event, 'support')">Support Tools</span>
     </div>
     <div id="bsm" class="tab active">
         <div id="bsmContent" style="height: 600px; width: 80%;"></div>
@@ -316,9 +369,9 @@
                         <option value="">Select Intersection</option>
                     </select>
                     
-                    <button class="sidebar-button active" data-view="MAP" onclick="selectView('MAP')">MAP</button>
-                    <button class="sidebar-button" data-view="SPaT" onclick="selectView('SPaT')">SPaT</button>
-                    <button class="sidebar-button" data-view="RSP" onclick="selectView('RSP')">RSP</button>
+                    <button id="mapTab" class="sidebar-button active" data-view="MAP" onclick="selectView('MAP')">MAP</button>
+                    <button id="spatTab" class="sidebar-button" data-view="SPaT" onclick="selectView('SPaT')">SPaT</button>
+                    <button id="rspTab" class="sidebar-button" data-view="RSP" onclick="selectView('RSP')">RSP</button>
                 </div>
             </div>
             <div style="flex: 3;">
@@ -336,8 +389,29 @@
                     </div>
                     <div id="rspContainer" class="rsp-container">
                         <h3>RSP Status</h3>
-                        <div id="rsuStatus">
-                            Loading RSU status...
+                        <div id="rsuStatus" style="font-size: 20px; font-weight: bold;">
+                            <br> -- Configuration -- <br>
+                            IP: 172.168.202.145<br>
+                            Part: 17022<br>
+                            Status: <span style="color: green;">Connected</span><br>
+                            <br> -- Software and Data Standard Version -- <br>
+                            Ubuntu: Server 22.04 <br>
+                            CTSCP: 3.10 build 15 <br>
+                            MMITSS: 202509 <br>
+                            SAE J2735: 202409 <br>
+                            RSU Firmware: Yunex 2.2.37 <br>
+                            <br> -- Interface -- <br>
+                            RSU: <span style="color: green;">Connected; </span>
+                            <span style="color: red;">Data Communicating; </span><br>
+                            TSC: <span style="color: green;">Connected;  Data Receiving; </span><br>
+                            <br> -- Functions -- <br>
+                            SPaT Decoding and Encoding: <span style="color: green;">ON</span><br>
+                            SPaT Forwarding: <span style="color: green;">ON</span><br>
+                            MAP Decoding: <span style="color: gray;">OFF</span><br>
+                            BSM Receiving: <span style="color: gray;">OFF</span><br>
+                            BSM Tracking: <span style="color: gray;">OFF</span><br>
+                            Signal Priority Application: <span style="color: gray;">OFF</span><br>
+                            <br>
                         </div>
                     </div>    
                 </div>
@@ -348,9 +422,9 @@
                     <div id="mapFileContainer" class="map-container">
                         <h3>MAP Validation</h3>
                         <!-- <div id="mapFileList"></div> -->
-                        <div id="mapPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
-                    
-                        <textarea id="mapJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
+                        <div id="mapPayloadContent" class="payloadText"></div>
+                        <div id="mapJsonContent" readonly class="payloadText"></div>
+                        
                         <div style="margin-top: 20px;">
                             <h3>Download Files</h3>
                             <a href="#" id="mapPayload" class="downloadlink">
@@ -371,9 +445,9 @@
                     <div id="spatFileContainer" class="map-container">
                         <h3>SPaT Validation</h3>
                         <!-- <div id="mapFileList"></div> -->
-                        <div id="spatPayloadContent" style="white-space: pre-wrap; background-color: #333; color: white; padding: 10px; margin-top: 10px; max-height: 200px; overflow-y: auto;"></div>
-                    
-                        <textarea id="spatJsonContent" readonly style="width: 100%; height: 200px; background-color: #333; color: white; padding: 10px; margin-top: 10px; overflow-y: auto; resize: vertical; font-family: monospace; border: 1px solid #555;"></textarea>
+                        <div id="spatPayloadContent" class="payloadText"></div>
+                        <div id="spatJsonContent" readonly class="payloadText"></div>
+
                         <div style="margin-top: 20px;">
                             <h3>Download Files</h3>
                             <a href="#" id="spatPayload" class="downloadlink">
@@ -384,18 +458,37 @@
                             </a><br>    
                         </div>
                     </div>
+                    <!-- RSP Installation Container -->
+                    <div id="rspInstallContainer" class="map-container">
+                        <h3>RSP Installation</h3>
+                        <button onclick="installRSP()">Install RSP</button>
+                        <textarea id="rspInstallStatus" readonly style="width: 100%; height: 20px; margin-top: 10px; overflow-y: auto; resize: horizontal; font-family: monospace; border: 0px;"></textarea>
+                        <div id="rspInstallOutput" style="margin-top: 15px; padding: 10px; background-color: #333; color: white; font-family: monospace; max-height: 300px; overflow-y: auto; border-radius: 4px; white-space: pre-wrap; display: none;">
+
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
     <div id="support" class="tab">
         <div class="upload-section">
-            <h3>Payload Revision</h3>
-            <p>Upload a MAP payload file (.payload) to process and revise it:</p>
-            <input type="file" id="payloadUpload" accept=".payload">
+            <h3>Payload Validation and Revision</h3>
+            <label for="hexInput">Hex Payload Values:</label> <br>
+            <textarea id="hexInput" style="width: 50%; height: 100px; margin: 10px 0; padding: 8px; font-family: monospace; border: 1px solid #ccc; border-radius: 4px;"></textarea>
             <br>
-            <button onclick="uploadPayload()">Upload and Process</button>
-            <div id="payloadResult"></div>
+            <p>OR Upload a MAP payload file (.payload):</p>
+            <input type="file" id="payloadUpload" accept=".payload">
+            <tab></tab><button onclick="uploadPayload()">Upload and Process</button>
+            <br> <br> 
+            <p>Validation Summary: </p>
+            <div id="revisingResult" class="payloadText" style="width: 50%;"></div>
+            <p>Original Payload Length: </p>
+            <div id="origPayloadLen" class="payloadText" style="width: 50%;"></div>
+            <p>Revised Payload: </p>
+            <div id="revPayload" class="payloadText" style="width: 50%;"></div>
+            <p>Revised Payload Length: </p>
+            <div id="revPayloadLen" class="payloadText" style="width: 50%;"></div>
         </div>
         
         <div style="margin-top: 20px;">
