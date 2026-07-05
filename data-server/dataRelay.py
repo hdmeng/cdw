@@ -16,5 +16,6 @@ if __name__ == '__main__':
         # print(f"Received message from {addr}: {data.decode()}")
         # Send a reply back to the client
         if len(data) != 0 :
+            sock_rx.sendto(data, ('127.0.0.1', 15009))
             sock_rx.sendto(data, ('128.32.129.118', 4520))
 
