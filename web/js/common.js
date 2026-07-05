@@ -48,14 +48,14 @@ async function loadGoogleMapsAPI() {
     const apiKey = apiKeyData.api_key;
 
     return new Promise((resolve, reject) => {
-        mapsScript = document.createElement('script');
-        mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=loadGoogleMapsAPI&libraries=marker`; 
-        mapsScript.async = true;
-        mapsScript.defer = true;
-        mapsScript.onload = () => {
+        window._mapsApiReady = () => {
             cv2x.mapsScriptLoaded = true;
             resolve();
         };
+        mapsScript = document.createElement('script');
+        mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=_mapsApiReady&libraries=marker`;
+        mapsScript.async = true;
+        mapsScript.defer = true;
         mapsScript.onerror = reject;
         document.head.appendChild(mapsScript);
     });
@@ -185,6 +185,8 @@ async function selectIntersection(index) {
         //} else if (cv2x.viewTab === 'SPaT') {
         //    showSpatFiles(cv2x.thisIntxn.name);
         //}
+		// switch to MAP tab upon intersection selection
+		document.getElementById('mapTab').click();
         
     }
 }

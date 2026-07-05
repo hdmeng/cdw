@@ -3,7 +3,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>intxn V2X Applications Demo</title>
+    <title>El-Camino-Real V2X Corridor</title>
+    <link rel="icon" href="data:,">
     <script src="../js/common.js"></script>
     
     <style>
@@ -165,30 +166,34 @@
     </style>
     <script>
         
-        
+		function initialView() {
+			// Set default view to MAP
+			const mapContainer = document.getElementById('mapContainer');
+			const spatContainer = document.getElementById('spatContainer');
+			const rspContainer = document.getElementById('rspContainer');
+			const mapFileContainer = document.getElementById('mapFileContainer');
+			const spatFileContainer = document.getElementById('spatFileContainer');
+			const rspInstallContainer = document.getElementById('rspInstallContainer');
+			mapContainer.style.display = 'none';
+			mapFileContainer.style.display = 'none';
+			spatContainer.style.display = 'none';
+			spatFileContainer.style.display = 'none';
+			rspContainer.style.display = 'none';
+			rspInstallContainer.style.display = 'none';
+		}
+
         // Function to handle sidebar button clicks
         function selectView(viewType) {
+			initialView();
+
             cv2x.viewTab = viewType;
             // Remove active class from all buttons
             const buttons = document.querySelectorAll('.sidebar-button');
             buttons.forEach(btn => btn.classList.remove('active'));
             
             // Add active class to clicked button
-            event.target.classList.add('active');
-            
-            const mapContainer = document.getElementById('mapContainer');
-            const spatContainer = document.getElementById('spatContainer');
-            const rspContainer = document.getElementById('rspContainer');
-            const mapFileContainer = document.getElementById('mapFileContainer');
-            const spatFileContainer = document.getElementById('spatFileContainer');
-            const rspInstallContainer = document.getElementById('rspInstallContainer');
-
-            mapContainer.style.display = 'none';
-            mapFileContainer.style.display = 'none';
-            spatContainer.style.display = 'none';
-            spatFileContainer.style.display = 'none';
-            rspContainer.style.display = 'none';
-            rspInstallContainer.style.display = 'none';
+            if (event && event.target) {
+            }
 
             // Handle different view types
             if (viewType === 'MAP') {
@@ -320,7 +325,12 @@
             document.getElementById(tabName).classList.add('active');
             if (event) {
                 event.currentTarget.classList.add('active');
+            } else {
+                const matchingLink = document.querySelector(`.tab-links[onclick*="'${tabName}'"]`);
+                if (matchingLink) matchingLink.classList.add('active');
             }
+
+            localStorage.setItem('activeTab', tabName);
 
             // Call the appropriate function based on the tab name
             if (tabName === 'vmap') {
@@ -328,21 +338,24 @@
                 // Set MAP as default active button
                 document.querySelector('.sidebar-button[data-view="MAP"]').classList.add('active');
                 // startTSCUpdates(); // Start TSC updates when vmap tab is opened
+				selectView('MAP'); // Initialize the view to MAP
             } else if (tabName === 'facility') {
                 bsmTraj();
             }
         }
 
         window.onload = function() {
-            openTab(null, 'vmap');
-
+            const savedTab = localStorage.getItem('activeTab');
+            const validTabs = ['facility', 'vmap', 'support'];
+            const tabToOpen = (savedTab && validTabs.includes(savedTab)) ? savedTab : 'vmap';
+            openTab(null, tabToOpen);
         }
     </script>
 </head>
 <body>
     <div>
         <span class="tab-links" onclick="openTab(event, 'facility')">Facility</span>
-        <span class="tab-links active" onclick="openTab(event, 'vmap')">Intersections</span>
+		<span class="tab-links active" onclick="openTab(event, 'vmap')">Intersections</span>
         <span class="tab-links" onclick="openTab(event, 'support')">Support Tools</span>
     </div>
     <div id="bsm" class="tab active">
@@ -356,9 +369,9 @@
                         <option value="">Select Intersection</option>
                     </select>
                     
-                    <button class="sidebar-button active" data-view="MAP" onclick="selectView('MAP')">MAP</button>
-                    <button class="sidebar-button" data-view="SPaT" onclick="selectView('SPaT')">SPaT</button>
-                    <button class="sidebar-button" data-view="RSP" onclick="selectView('RSP')">RSP</button>
+                    <button id="mapTab" class="sidebar-button active" data-view="MAP" onclick="selectView('MAP')">MAP</button>
+                    <button id="spatTab" class="sidebar-button" data-view="SPaT" onclick="selectView('SPaT')">SPaT</button>
+                    <button id="rspTab" class="sidebar-button" data-view="RSP" onclick="selectView('RSP')">RSP</button>
                 </div>
             </div>
             <div style="flex: 3;">

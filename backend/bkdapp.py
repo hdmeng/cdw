@@ -15,6 +15,8 @@ import uvicorn
 import os
 from dotenv import load_dotenv
 import base64
+import xml.etree.ElementTree as ET
+from pathlib import Path
 
 # Add the data-server directory to the Python path
 sys.path.append('./data-server')
@@ -156,6 +158,48 @@ async def download_file(filename: str):
         return FileResponse(file_path, headers=headers)
     else:
         return JSONResponse({"error": "File not found"}, status_code=404)
+
+
+@app.get('/api/viz_cameras')
+async def get_viz_cameras():
+    camera_file = Path(__file__).resolve().parent.parent / 'maps' / 'xml' / 'CamerasInPolygon.xml'
+
+    if not camera_file.exists():
+        return JSONResponse({"error": "Camera XML not found"}, status_code=404)
+
+    try:
+        tree = ET.parse(camera_file)
+        root = tree.getroot()
+        namespace = {'cam': 'http://tempuri.org/DataSetCameras.xsd'}
+
+        cameras = []
+        for camera_node in root.findall('.//cam:Cameras', namespace):
+            lat_text = camera_node.findtext('cam:Latitude', default='', namespaces=namespace)
+            lng_text = camera_node.findtext('cam:Longitude', default='', namespaces=namespace)
+
+            try:
+                lat = float(lat_text)
+                lng = float(lng_text)
+            except (TypeError, ValueError):
+                continue
+
+            cameras.append({
+                'camera_id': camera_node.findtext('cam:CameraID', default='', namespaces=namespace),
+                'region_id': camera_node.findtext('cam:RegionID', default='', namespaces=namespace),
+                'name': camera_node.findtext('cam:Name', default='Unnamed camera', namespaces=namespace),
+                'lat': lat,
+                'lng': lng,
+                'view': camera_node.findtext('cam:View', default='', namespaces=namespace),
+                'closest_lane': camera_node.findtext('cam:ClosestLane', default='', namespaces=namespace),
+                'marker_post': camera_node.findtext('cam:MarkerPost', default='', namespaces=namespace),
+                'stream_url': camera_node.findtext('cam:StreamWebAddress', default='', namespaces=namespace),
+                'stream_url_2': camera_node.findtext('cam:StreamWebAddress2', default='', namespaces=namespace),
+                'out_of_service': camera_node.findtext('cam:DetectedOutOfService', default='false', namespaces=namespace).lower() == 'true',
+            })
+
+        return JSONResponse(cameras)
+    except ET.ParseError as exc:
+        return JSONResponse({"error": f"Failed to parse camera XML: {exc}"}, status_code=500)
 
 # procee map payload upload and return the revied MAP JSON and payload
 @app.post('/api/process_map_payload')
