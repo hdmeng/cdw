@@ -17,11 +17,14 @@ from dotenv import load_dotenv
 import base64
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from functools import lru_cache
+from datetime import datetime, timedelta
 
 # Add the data-server directory to the Python path
 sys.path.append('./data-server')
 import mapParse as mpp
 import dataParse as dap
+import driveFilter
 
 # Load environment variables
 load_dotenv()
@@ -55,6 +58,11 @@ markers = [
     {"lat": 37.915572, "lng": -122.334873},  # COIN @ RFS
     # Add more coordinates here
 ]
+
+DRIVE_SOURCE_PATH = Path(__file__).resolve().parent.parent / 'maps' / 'xml' 
+DRIVE_ORG_FILE = 'Get_Drives_All.json'
+DRIVE_FILTERED_FILE = 'Filtered_Get_Drives.json'
+DRIVE_WINDOW_MINUTES = driveFilter.DEFAULT_WINDOW_MINUTES
 
 # Serve the API key
 @app.get('/api/key')
@@ -160,46 +168,165 @@ async def download_file(filename: str):
         return JSONResponse({"error": "File not found"}, status_code=404)
 
 
-@app.get('/api/viz_cameras')
-async def get_viz_cameras():
+@lru_cache(maxsize=1)
+def load_viz_cameras():
     camera_file = Path(__file__).resolve().parent.parent / 'maps' / 'xml' / 'CamerasInPolygon.xml'
 
     if not camera_file.exists():
-        return JSONResponse({"error": "Camera XML not found"}, status_code=404)
+        raise FileNotFoundError('Camera XML not found')
 
+    tree = ET.parse(camera_file)
+    root = tree.getroot()
+    namespace = {'cam': 'http://tempuri.org/DataSetCameras.xsd'}
+
+    cameras = []
+    for camera_node in root.findall('.//cam:Cameras', namespace):
+        lat_text = camera_node.findtext('cam:Latitude', default='', namespaces=namespace)
+        lng_text = camera_node.findtext('cam:Longitude', default='', namespaces=namespace)
+
+        try:
+            lat = float(lat_text)
+            lng = float(lng_text)
+        except (TypeError, ValueError):
+            continue
+
+        cameras.append({
+            'camera_id': camera_node.findtext('cam:CameraID', default='', namespaces=namespace),
+            'region_id': camera_node.findtext('cam:RegionID', default='', namespaces=namespace),
+            'name': camera_node.findtext('cam:Name', default='Unnamed camera', namespaces=namespace),
+            'lat': lat,
+            'lng': lng,
+            'view': camera_node.findtext('cam:View', default='', namespaces=namespace),
+            'closest_lane': camera_node.findtext('cam:ClosestLane', default='', namespaces=namespace),
+            'marker_post': camera_node.findtext('cam:MarkerPost', default='', namespaces=namespace),
+            'stream_url': camera_node.findtext('cam:StreamWebAddress', default='', namespaces=namespace),
+            'stream_url_2': camera_node.findtext('cam:StreamWebAddress2', default='', namespaces=namespace),
+            'out_of_service': camera_node.findtext('cam:DetectedOutOfService', default='false', namespaces=namespace).lower() == 'true',
+        })
+
+    return cameras
+
+
+@lru_cache(maxsize=1)
+def load_viz_drives():
+    drive_file = DRIVE_SOURCE_PATH / DRIVE_FILTERED_FILE
+
+    if not drive_file.exists():
+        raise FileNotFoundError('Drive trajectory JSON not found')
+
+    with drive_file.open('r', encoding='utf-8') as handle:
+        drive_data = json.load(handle)
+
+    trajectories = []
+    time_values = []
+    for feature in drive_data.get('features', []):
+        coordinates = feature.get('geometry', {}).get('coordinates', [])
+        if len(coordinates) < 2:
+            continue
+
+        points = []
+        for lng, lat in coordinates:
+            points.append({'lat': lat, 'lng': lng})
+
+        properties = feature.get('properties', {})
+        time_value = properties.get('Time')
+        if time_value:
+            time_values.append(time_value)
+        trajectories.append({
+            'vehicle_id': properties.get('VehicleId'),
+            'speed': properties.get('Speed'),
+            'heading': properties.get('Heading'),
+            'seconds': properties.get('Seconds'),
+            'time': time_value,
+            'online': properties.get('Online'),
+            'points': points,
+        })
+
+    unique_vehicle_ids = {traj['vehicle_id'] for traj in trajectories if traj.get('vehicle_id') is not None}
+
+    return {
+        'trajectories': trajectories,
+        'summary': {
+            'trajectory_count': len(trajectories),
+            'vehicle_count': len(unique_vehicle_ids),
+            'time_start': min(time_values) if time_values else None,
+            'time_end': max(time_values) if time_values else None,
+            'source_file': drive_file.name,
+        }
+    }
+
+
+def load_viz_drive_source_bounds():
+    return driveFilter.DEFAULT_SOURCE_TIME_RANGE
+
+
+def build_drive_window(start_time_text=None):
+    source_bounds = load_viz_drive_source_bounds()
+    default_start = source_bounds.get('start')
+    selected_start = start_time_text or default_start
+    if not selected_start:
+        raise ValueError('Drive source time range is unavailable')
+
+    start_dt = datetime.fromisoformat(selected_start.replace('Z', '+00:00'))
+    end_dt = start_dt + timedelta(minutes=DRIVE_WINDOW_MINUTES)
+    selected_end = end_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+
+    source_end = source_bounds.get('end')
+    if source_end and selected_end > source_end:
+        selected_end = source_end
+
+    return {
+        'start': selected_start,
+        'end': selected_end,
+    }
+
+
+def refresh_viz_drives(start_time_text=None):
+    window = build_drive_window(start_time_text)
+    # get the date from the start time
+    filter_date = window['start'].split('T')[0]
+    driveFilter.filter_drive_data(
+        str(DRIVE_SOURCE_PATH / f"BayArea_{filter_date}_{DRIVE_ORG_FILE}"),
+        str(DRIVE_SOURCE_PATH / DRIVE_FILTERED_FILE),
+        driveFilter.DEFAULT_FILTER_LOC_BOX,
+        window,
+        max_features=None,
+    )
+    load_viz_drives.cache_clear()
+    return window
+
+
+@app.get('/api/viz_cameras')
+async def get_viz_cameras():
     try:
-        tree = ET.parse(camera_file)
-        root = tree.getroot()
-        namespace = {'cam': 'http://tempuri.org/DataSetCameras.xsd'}
-
-        cameras = []
-        for camera_node in root.findall('.//cam:Cameras', namespace):
-            lat_text = camera_node.findtext('cam:Latitude', default='', namespaces=namespace)
-            lng_text = camera_node.findtext('cam:Longitude', default='', namespaces=namespace)
-
-            try:
-                lat = float(lat_text)
-                lng = float(lng_text)
-            except (TypeError, ValueError):
-                continue
-
-            cameras.append({
-                'camera_id': camera_node.findtext('cam:CameraID', default='', namespaces=namespace),
-                'region_id': camera_node.findtext('cam:RegionID', default='', namespaces=namespace),
-                'name': camera_node.findtext('cam:Name', default='Unnamed camera', namespaces=namespace),
-                'lat': lat,
-                'lng': lng,
-                'view': camera_node.findtext('cam:View', default='', namespaces=namespace),
-                'closest_lane': camera_node.findtext('cam:ClosestLane', default='', namespaces=namespace),
-                'marker_post': camera_node.findtext('cam:MarkerPost', default='', namespaces=namespace),
-                'stream_url': camera_node.findtext('cam:StreamWebAddress', default='', namespaces=namespace),
-                'stream_url_2': camera_node.findtext('cam:StreamWebAddress2', default='', namespaces=namespace),
-                'out_of_service': camera_node.findtext('cam:DetectedOutOfService', default='false', namespaces=namespace).lower() == 'true',
-            })
-
-        return JSONResponse(cameras)
+        return JSONResponse(load_viz_cameras())
+    except FileNotFoundError:
+        return JSONResponse({"error": "Camera XML not found"}, status_code=404)
     except ET.ParseError as exc:
         return JSONResponse({"error": f"Failed to parse camera XML: {exc}"}, status_code=500)
+
+
+@app.get('/api/viz_drives')
+async def get_viz_drives(reload: bool = False, start_time: str | None = None):
+    try:
+        source_bounds = load_viz_drive_source_bounds()
+        window = None
+        if reload or start_time:
+            window = refresh_viz_drives(start_time)
+
+        drive_payload = load_viz_drives()
+        drive_payload['summary']['window_minutes'] = DRIVE_WINDOW_MINUTES
+        drive_payload['summary']['available_time_start'] = source_bounds.get('start')
+        drive_payload['summary']['available_time_end'] = source_bounds.get('end')
+        drive_payload['summary']['selected_time_start'] = window['start'] if window else drive_payload['summary'].get('time_start')
+        drive_payload['summary']['selected_time_end'] = window['end'] if window else drive_payload['summary'].get('time_end')
+        return JSONResponse(drive_payload)
+    except FileNotFoundError:
+        return JSONResponse({"error": "Drive trajectory JSON not found"}, status_code=404)
+    except json.JSONDecodeError as exc:
+        return JSONResponse({"error": f"Failed to parse drive trajectory JSON: {exc}"}, status_code=500)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
 # procee map payload upload and return the revied MAP JSON and payload
 @app.post('/api/process_map_payload')
@@ -246,10 +373,10 @@ async def process_map_payload(request: Request):
 RSU_AUTH = os.getenv('RSU_AUTH', "-t 2 -v 3 -l authPriv -a SHA512 -A Path$%@106 -x AES256 -X Path$%@106 -u datasvr")
 OID_ROOT = os.getenv('OID_ROOT', "1.3.6.1.4.1.1206.4.2.18")
         
-# get the equipment states of RCU, e.g. /api/rsu_state?rsnode=ecr-pgml
+# get the equipment states of RCU, e.g. /api/rsu_state?nodeid=ecr-pgml
 # return the Radio states 
 @app.get('/api/rsu_state')
-async def get_rsu_state(rsnode: str):
+def get_rsu_state(nodeid: str):
     # RSU_UDP = os.getenv('RSU_UDP', "udp:192.168.1.108:161")
     RSU_UDP = os.getenv('RSU_UDP', "udp:192.168.1.108:161")
     try:
@@ -283,7 +410,7 @@ spat_phases = {}
 
 # get Controller state based on SPaT updates, e.g. /api/tsc_state?rsnode=ecr-pgml
 @app.get('/api/tsc_state')
-async def get_controller_state(intxnid: int):
+def get_controller_state(intxnid: int):
     global spat_phases
     sig_state = ['G','R','R','R','R','R','R','R'
             ,'R','R','R','R','R','R','R','R','R']  # Default signal states
@@ -341,7 +468,7 @@ async def get_spat_files(intxn: str):
     
 # get RSP status
 @app.get('/api/rsp_install')
-async def set_rsp_install():
+def set_rsp_install():
     
     # set RSP connection status by pinging the RSP
     try:
@@ -355,7 +482,7 @@ async def set_rsp_install():
 
 # get RSP status
 @app.get('/api/rsp_state')
-async def get_rsp_status():
+def get_rsp_status(nodeid: str):
     # get RSP connection status by pinging the RSP
     try:
         # Implement your logic to check RSP connection

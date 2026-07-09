@@ -3,7 +3,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>intxn V2X Applications Demo</title>
+    <title>Connected Vehicle Applications Demo</title>
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
     <style>
         .tab {
@@ -35,7 +35,7 @@
             overflow-y: auto;
             padding: 10px;
         }
-        #vmapContent {
+        #sysMapContent {
             margin-left: 220px; /* Adjust this value based on the width of your sidebar */
         } 
         .state-box {
@@ -58,10 +58,22 @@
             height: 100%;
             display: block;
         }
+        .slider-stack {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .slider-ticks {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #475569;
+            padding: 0 2px;
+        }
     </style>
     <script>
         const SERVER_URL = 'http://128.32.129.118'; 
-        //// 'http://128.32.129.118';
         const SERVER_PORT = 5000;
         const SOCKET_PORT = 5000;
 
@@ -71,12 +83,25 @@
         // });
 
         let mapsScript;
+        let mapsScriptPromise;
         let mapsScriptLoaded = false;
         let map3dElement;
         let map;
         let cameraMap;
+        let cameraDataPromise;
         let cameraMarkers = [];
-        let vmap_notloaded = true;
+        let driveMap;
+        let driveDataPromise;
+        let drivePolylines = [];
+        let driveBounds;
+        let driveInfoWindow;
+        let driveLayerInitialized = false;
+        let driveSliderInitialized = false;
+        let driveReloadTimer;
+        let cameraLayerInitialized = false;
+        let cameraInfoWindow;
+        let cameraBounds;
+        let sysMap_notloaded = true;
 
         const lineColor = {
             64: 'green',    // egress 
@@ -90,8 +115,13 @@
 
         // Load the Google Maps JavaScript API
         async function loadGMPsAPI() {
-            if (mapsScriptLoaded) {
+            if (mapsScriptLoaded || (typeof google !== 'undefined' && google.maps)) {
+                mapsScriptLoaded = true;
                 return Promise.resolve();
+            }
+
+            if (mapsScriptPromise) {
+                return mapsScriptPromise;
             }
 
             // Fetch the API key from the server
@@ -100,7 +130,7 @@
             const apiKey = apiKeyData.api_key;
 
 
-            return new Promise((resolve, reject) => {
+            mapsScriptPromise = new Promise((resolve, reject) => {
                 /* // Add the gmp-map-3d element dynamically
                 map3dElement = document.createElement('gmp-map-3d');
                 map3dElement.setAttribute('mode', 'hybrid');
@@ -113,32 +143,26 @@
 
                 mapsScript = document.createElement('script');
                 mapsScript.async = true;
-                mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=alpha&libraries=maps3d&loading=async&callback=initMap`;
+                // mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=alpha&libraries=maps3d&loading=async&callback=initMap`;
+                mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=initMap`;
                 
                 // Define the callback function
                 window.initMap = () => {
                     mapsScriptLoaded = true;
+                    mapsScriptPromise = null;
                     resolve();
                 };
                 
                 mapsScript.onerror = (error) => {
+                    mapsScriptPromise = null;
                     console.error('Failed to load Google Maps:', error);
                     reject(error);
                 };
                 document.head.appendChild(mapsScript);
 
-                /* mapsScript = document.createElement('script');
-                mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`; 
-                mapsScript.async = true;
-                mapsScript.defer = true;
-                mapsScript.onload = () => {
-                    mapsScriptLoaded = true;
-                    resolve();
-                };
-                mapsScript.onerror = reject;
-                document.head.appendChild(mapsScript);
-                */
             });
+
+            return mapsScriptPromise;
         }
 
         function removeGoogleMapsAPI() {
@@ -146,6 +170,7 @@
                 document.head.removeChild(mapsScript);
                 document.head.removeChild(map3dElement);
                 mapsScript = null;
+                mapsScriptPromise = null;
                 mapsScriptLoaded = false;
             }
         }
@@ -155,11 +180,11 @@
                 const site = 'RFS'; // or 'ECR', depending on the desired site
                 const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/intxn_list?site=${site}`);
                 const intxns = await response.json();
-                if (vmap_notloaded) {
+                if (sysMap_notloaded) {
                     populateSidebar(intxns);
                 }
                 // set the tab notloaded flag to false
-                vmap_notloaded = false;
+                sysMap_notloaded = false;
              } catch (error) {
             console.error('Error fetching intersection list:', error);
             }
@@ -262,7 +287,7 @@
                 // });
                 const intervalId = setInterval(async () => {
                 // Replace with your API call
-                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/rsu_state?rsnode=rfs-coin`)
+                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/rsu_state?nodeid=rfs-coin`)
                         .then(response => response.json())
                         .then(data => {
                             const rsuStatus = document.getElementById('rsuStatus');
@@ -322,12 +347,12 @@
             }
         }
         
-        // Show MEC state getting from "mec_state" in the rsuStatus div
+        // Show MEC state getting from "rsp_state" in the rsuStatus div
         async function showMECStatus() {
             try {
                 const intervalId = setInterval(async () => {
                 // Replace with your API call
-                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/mec_state`)
+                    await fetch(`${SERVER_URL}:${SERVER_PORT}/api/rsp_state?nodeid=rfs-coin`)
                         .then(response => response.json())
                         .then(data => {
                             const mecStatus = document.getElementById('mecStatus');
@@ -345,7 +370,7 @@
                         });
                 }, 5000); // Calls every 5 seconds
             } catch (error) {
-                console.error('Error getting RSU state:', error);
+                console.error('Error getting RSP state:', error);
             }
         }
 
@@ -364,7 +389,7 @@
                 const mapCenter = await mapCenterResponse.json();
                 
                 // Create the map
-                map = new google.maps.Map(document.getElementById("vmapContent"), {
+                map = new google.maps.Map(document.getElementById("sysMapContent"), {
                     zoom: 19,
                     center: mapCenter,
                     mapTypeId: 'satellite'
@@ -377,37 +402,137 @@
             }
         }
 
-        async function renderCameraMap() {
-            try {
-                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
-                    await loadGMPsAPI();
-                    await new Promise(resolve => setTimeout(resolve, 1000));
+        function clearCameraMarkers() {
+            cameraMarkers.forEach(marker => marker.setMap(null));
+            cameraMarkers = [];
+        }
+
+        function getCameraClusterStep(zoom) {
+            if (zoom <= 5) {
+                return 2;
+            }
+            if (zoom <= 7) {
+                return 1;
+            }
+            if (zoom <= 9) {
+                return 0.5;
+            }
+            if (zoom <= 11) {
+                return 0.2;
+            }
+            if (zoom <= 13) {
+                return 0.08;
+            }
+            return 0;
+        }
+
+        function buildCameraInfo(camera) {
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>${camera.name || 'Unnamed camera'}</strong><br>
+                    Camera ID: ${camera.camera_id || 'n/a'}<br>
+                    Region: ${camera.region_id || 'n/a'}<br>
+                    View: ${camera.view || 'n/a'}<br>
+                    Closest Lane: ${camera.closest_lane || 'n/a'}<br>
+                    Marker Post: ${camera.marker_post || 'n/a'}<br>
+                    Status: ${camera.out_of_service ? 'Out of service' : 'Active'}
+                </div>
+            `;
+        }
+
+        function updateCameraViewport() {
+            if (!cameraMap || !cameraLayerInitialized) {
+                return;
+            }
+
+            const bounds = cameraMap.getBounds();
+            if (!bounds || !cameraDataPromise) {
+                return;
+            }
+
+            cameraDataPromise.then(cameras => {
+                const zoom = cameraMap.getZoom() || 4;
+                const northEast = bounds.getNorthEast();
+                const southWest = bounds.getSouthWest();
+                const minLat = southWest.lat();
+                const maxLat = northEast.lat();
+                const minLng = southWest.lng();
+                const maxLng = northEast.lng();
+                const crossesDateLine = minLng > maxLng;
+
+                const visibleCameras = cameras.filter(camera => {
+                    const inLat = camera.lat >= minLat && camera.lat <= maxLat;
+                    const inLng = crossesDateLine
+                        ? camera.lng >= minLng || camera.lng <= maxLng
+                        : camera.lng >= minLng && camera.lng <= maxLng;
+                    return inLat && inLng;
+                });
+
+                clearCameraMarkers();
+
+                if (!visibleCameras.length) {
+                    document.getElementById('cameraCount').textContent = `0 Street Cameras in current view of ${cameras.length} total`;
+                    return;
                 }
 
-                const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/viz_cameras`);
-                if (!response.ok) {
-                    throw new Error(`Camera API returned ${response.status}`);
-                }
+                const clusterStep = getCameraClusterStep(zoom);
+                const useClusters = clusterStep > 0 && visibleCameras.length > 300;
 
-                const cameras = await response.json();
-                const cameraCount = document.getElementById('cameraCount');
-                const mapContainer = document.getElementById('cameraMapContent');
-
-                if (!cameraMap) {
-                    cameraMap = new google.maps.Map(mapContainer, {
-                        zoom: 12,
-                        center: { lat: 37.915572, lng: -122.334873 },
-                        mapTypeId: 'roadmap'
+                if (useClusters) {
+                    const clusterBuckets = new Map();
+                    visibleCameras.forEach(camera => {
+                        const latKey = Math.round(camera.lat / clusterStep);
+                        const lngKey = Math.round(camera.lng / clusterStep);
+                        const bucketKey = `${latKey}:${lngKey}`;
+                        const bucket = clusterBuckets.get(bucketKey) || {
+                            latSum: 0,
+                            lngSum: 0,
+                            cameras: []
+                        };
+                        bucket.latSum += camera.lat;
+                        bucket.lngSum += camera.lng;
+                        bucket.cameras.push(camera);
+                        clusterBuckets.set(bucketKey, bucket);
                     });
+
+                    clusterBuckets.forEach(bucket => {
+                        const count = bucket.cameras.length;
+                        const position = {
+                            lat: bucket.latSum / count,
+                            lng: bucket.lngSum / count
+                        };
+                        const marker = new google.maps.Marker({
+                            position,
+                            map: cameraMap,
+                            label: {
+                                text: String(count),
+                                color: 'white',
+                                fontSize: '11px',
+                                fontWeight: 'bold'
+                            },
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                fillColor: '#b45309',
+                                fillOpacity: 0.88,
+                                scale: Math.max(10, Math.min(24, 8 + Math.log2(count) * 3)),
+                                strokeColor: '#ffffff',
+                                strokeWeight: 1.5
+                            }
+                        });
+
+                        marker.addListener('click', () => {
+                            cameraMap.panTo(position);
+                            cameraMap.setZoom(Math.min((cameraMap.getZoom() || 4) + 2, 18));
+                        });
+
+                        cameraMarkers.push(marker);
+                    });
+
+                    document.getElementById('cameraCount').textContent = `${visibleCameras.length} Street Cameras in the current view, grouped into ${clusterBuckets.size} clusters from ${cameras.length} total`;
+                    return;
                 }
 
-                cameraMarkers.forEach(marker => marker.setMap(null));
-                cameraMarkers = [];
-
-                const bounds = new google.maps.LatLngBounds();
-                const infoWindow = new google.maps.InfoWindow();
-
-                cameras.forEach(camera => {
+                visibleCameras.forEach(camera => {
                     const marker = new google.maps.Marker({
                         position: { lat: camera.lat, lng: camera.lng },
                         map: cameraMap,
@@ -415,40 +540,271 @@
                         icon: {
                             path: google.maps.SymbolPath.CIRCLE,
                             fillColor: camera.out_of_service ? '#9ca3af' : '#165391',
-                            fillOpacity: 1,
-                            scale: 6,
+                            fillOpacity: 0.95,
+                            scale: 4,
                             strokeColor: '#ffffff',
-                            strokeWeight: 2
+                            strokeWeight: 1
                         }
                     });
 
                     marker.addListener('click', () => {
-                        infoWindow.setContent(`
-                            <div style="min-width:220px; line-height:1.5;">
-                                <strong>${camera.name}</strong><br>
-                                Camera ID: ${camera.camera_id || 'n/a'}<br>
-                                Region: ${camera.region_id || 'n/a'}<br>
-                                View: ${camera.view || 'n/a'}<br>
-                                Closest Lane: ${camera.closest_lane || 'n/a'}<br>
-                                Marker Post: ${camera.marker_post || 'n/a'}<br>
-                                Status: ${camera.out_of_service ? 'Out of service' : 'Active'}
-                            </div>
-                        `);
-                        infoWindow.open(cameraMap, marker);
+                        cameraInfoWindow.setContent(buildCameraInfo(camera));
+                        cameraInfoWindow.open(cameraMap, marker);
                     });
 
                     cameraMarkers.push(marker);
-                    bounds.extend(marker.getPosition());
                 });
 
-                cameraCount.textContent = `${cameras.length} camera locations loaded from CamerasInPolygon.xml`;
+                document.getElementById('cameraCount').textContent = `${visibleCameras.length} Street Cameras in current view of ${cameras.length} total`;
+            }).catch(error => {
+                console.error('Error updating camera viewport:', error);
+                document.getElementById('cameraCount').textContent = `Failed to render camera locations: ${error.message}`;
+            });
+        }
 
-                if (cameras.length > 0) {
-                    cameraMap.fitBounds(bounds, 40);
+        async function renderCameraMap() {
+            try {
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    await loadGMPsAPI();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
                 }
+                const cameraCount = document.getElementById('cameraCount');
+                const mapContainer = document.getElementById('cameraMapContent');
+                cameraCount.textContent = 'Loading camera locations...';
+
+                if (!cameraMap) {
+                    cameraMap = new google.maps.Map(mapContainer, {
+                        zoom: 5,
+                        center: { lat: 37.915572, lng: -122.334873 },
+                        mapTypeId: 'roadmap'
+                    });
+                }
+
+                if (!cameraDataPromise) {
+                    cameraDataPromise = fetch(`${SERVER_URL}:${SERVER_PORT}/api/viz_cameras`)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Camera API returned ${response.status}`);
+                            }
+                            return response.json();
+                        });
+                }
+
+                const cameras = await cameraDataPromise;
+
+                if (!cameraLayerInitialized) {
+                    cameraBounds = new google.maps.LatLngBounds();
+                    cameras.forEach(camera => cameraBounds.extend({ lat: camera.lat, lng: camera.lng }));
+                    cameraInfoWindow = new google.maps.InfoWindow();
+                    cameraMap.addListener('idle', updateCameraViewport);
+
+                    if (cameras.length > 0) {
+                        cameraMap.fitBounds(cameraBounds, 40);
+                    }
+
+                    cameraLayerInitialized = true;
+                }
+
+                updateCameraViewport();
             } catch (error) {
                 console.error('Error rendering camera map:', error);
                 document.getElementById('cameraCount').textContent = `Failed to load camera locations: ${error.message}`;
+            }
+        }
+
+        function clearDrivePolylines() {
+            drivePolylines.forEach(polyline => polyline.setMap(null));
+            drivePolylines = [];
+        }
+
+        function buildDriveInfo(traj) {
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>Vehicle ${traj.vehicle_id || 'n/a'}</strong><br>
+                    Speed: ${traj.speed ?? 'n/a'}<br>
+                    Heading: ${traj.heading ?? 'n/a'}<br>
+                    Seconds: ${traj.seconds ?? 'n/a'}<br>
+                    Time: ${traj.time || 'n/a'}<br>
+                    Online: ${traj.online ? 'Yes' : 'No'}
+                </div>
+            `;
+        }
+
+        function getTrajectoryColor(vehicleId) {
+            const idText = String(vehicleId || 'unknown');
+            let hash = 0;
+
+            for (let index = 0; index < idText.length; index += 1) {
+                hash = ((hash << 5) - hash) + idText.charCodeAt(index);
+                hash |= 0;
+            }
+
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue}, 75%, 42%)`;
+        }
+
+        async function reloadDriveMap() {
+            driveDataPromise = null;
+            driveLayerInitialized = false;
+            driveBounds = null;
+            clearDrivePolylines();
+            if (driveInfoWindow) {
+                driveInfoWindow.close();
+            }
+            await renderDriveMap(true);
+        }
+
+        function formatSliderTime(valueMs) {
+            return new Date(Number(valueMs)).toISOString().replace('.000Z', 'Z');
+        }
+
+        function updateDriveSliderLabel() {
+            const slider = document.getElementById('driveStartSlider');
+            const label = document.getElementById('driveStartLabel');
+            if (!slider || !label) {
+                return;
+            }
+
+            const startIso = formatSliderTime(slider.value);
+            const endIso = new Date(Number(slider.value) + (30 * 60 * 1000)).toISOString().replace('.000Z', 'Z');
+            label.textContent = `Start ${startIso} | End ${endIso}`;
+        }
+
+        function formatTickLabel(valueMs) {
+            const tickDate = new Date(Number(valueMs));
+            const month = String(tickDate.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(tickDate.getUTCDate()).padStart(2, '0');
+            const hour = String(tickDate.getUTCHours()).padStart(2, '0');
+            return `${month}-${day} ${hour}:00`;
+        }
+
+        function updateDriveSliderTicks(minMs, maxMs) {
+            const tickContainer = document.getElementById('driveStartTicks');
+            if (!tickContainer) {
+                return;
+            }
+
+            tickContainer.innerHTML = '';
+            const sixHoursMs = 6 * 60 * 60 * 1000;
+            const firstTick = Math.ceil(minMs / sixHoursMs) * sixHoursMs;
+
+            for (let tickMs = firstTick; tickMs <= maxMs; tickMs += sixHoursMs) {
+                const tick = document.createElement('span');
+                tick.textContent = formatTickLabel(tickMs);
+                tickContainer.appendChild(tick);
+            }
+        }
+
+        function scheduleDriveWindowReload() {
+            updateDriveSliderLabel();
+            if (driveReloadTimer) {
+                clearTimeout(driveReloadTimer);
+            }
+            driveReloadTimer = setTimeout(() => {
+                reloadDriveMap();
+            }, 250);
+        }
+
+        async function renderDriveMap(forceReload = false) {
+            try {
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    await loadGMPsAPI();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                const driveCount = document.getElementById('driveCount');
+                const mapContainer = document.getElementById('driveMapContent');
+                driveCount.textContent = 'Loading vehicle trajectories...';
+
+                if (!driveMap) {
+                    driveMap = new google.maps.Map(mapContainer, {
+                        zoom: 9,
+                        center: { lat: 37.75, lng: -122.2 },
+                        mapTypeId: 'roadmap'
+                    });
+                }
+
+                if (forceReload) {
+                    driveDataPromise = null;
+                }
+
+                if (!driveDataPromise) {
+                    const slider = document.getElementById('driveStartSlider');
+                    const selectedStart = slider ? formatSliderTime(slider.value) : null;
+                    const driveUrl = forceReload
+                        ? `${SERVER_URL}:${SERVER_PORT}/api/viz_drives?reload=1&start_time=${encodeURIComponent(selectedStart)}&_=${Date.now()}`
+                        : `${SERVER_URL}:${SERVER_PORT}/api/viz_drives`;
+                    driveDataPromise = fetch(driveUrl)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Drive API returned ${response.status}`);
+                            }
+                            return response.json();
+                        });
+                }
+
+                const drivePayload = await driveDataPromise;
+                const trajectories = drivePayload.trajectories || [];
+                const summary = drivePayload.summary || {};
+
+                if (!driveSliderInitialized && summary.available_time_start && summary.available_time_end) {
+                    const slider = document.getElementById('driveStartSlider');
+                    const windowMinutes = summary.window_minutes || 30;
+                    const minMs = Date.parse(summary.available_time_start);
+                    const maxMs = Date.parse(summary.available_time_end) - (windowMinutes * 60 * 1000);
+                    const selectedMs = Date.parse(summary.selected_time_start || summary.available_time_start);
+                    slider.min = String(minMs);
+                    slider.max = String(Math.max(minMs, maxMs));
+                    slider.step = String(windowMinutes * 60 * 1000);
+                    slider.value = String(Math.min(Math.max(selectedMs, minMs), Math.max(minMs, maxMs)));
+                    updateDriveSliderTicks(minMs, Math.max(minMs, maxMs));
+                    updateDriveSliderLabel();
+                    driveSliderInitialized = true;
+                }
+
+                if (!driveLayerInitialized) {
+                    driveBounds = new google.maps.LatLngBounds();
+                    driveInfoWindow = new google.maps.InfoWindow();
+                    clearDrivePolylines();
+
+                    trajectories.forEach(traj => {
+                        const path = traj.points.map(point => {
+                            driveBounds.extend(point);
+                            return point;
+                        });
+
+                        const polyline = new google.maps.Polyline({
+                            path,
+                            geodesic: true,
+                            strokeColor: getTrajectoryColor(traj.vehicle_id),
+                            strokeOpacity: 0.8,
+                            strokeWeight: 3,
+                            map: driveMap
+                        });
+
+                        polyline.addListener('click', event => {
+                            driveInfoWindow.setContent(buildDriveInfo(traj));
+                            driveInfoWindow.setPosition(event.latLng);
+                            driveInfoWindow.open(driveMap);
+                        });
+
+                        drivePolylines.push(polyline);
+                    });
+
+                    if (trajectories.length > 0) {
+                        driveMap.fitBounds(driveBounds, 40);
+                    }
+
+                    driveLayerInitialized = true;
+                }
+
+                const timeRange = summary.time_start && summary.time_end
+                    ? `${summary.time_start} to ${summary.time_end}`
+                    : 'time range unavailable';
+                driveCount.textContent = `${summary.trajectory_count ?? trajectories.length} vehicle trajectories for ${summary.vehicle_count ?? trajectories.length} vehicles, time range ${timeRange}`;
+            } catch (error) {
+                console.error('Error rendering drive map:', error);
+                document.getElementById('driveCount').textContent = `Failed to load vehicle trajectories: ${error.message}`;
             }
         }
 
@@ -466,13 +822,14 @@
             }
 
             // Call the appropriate function based on the tab name
-            if (tabName === 'vmap') {
+            if (tabName === 'sysMap') {
                 // turn off the location update socket
                 // socket.off('marker_update');
                 
                 await mapValidate();
             } else if (tabName === 'cameraMap') {
                 await renderCameraMap();
+                await renderDriveMap();
             } else if (tabName === 'bsm') {
                 // socket.off('rsu_state');
 
@@ -491,15 +848,15 @@
             // Give the 3D maps a moment to initialize
             await new Promise(resolve => setTimeout(resolve, 1000));
 
-            openTab(null, 'scene');
+            openTab(null, 'cameraMap');
         }
     </script>
 </head>
 <body>
     <div>
-        <span class="tab-links active" onclick="openTab(event, 'scene')">Test Scene</span>
-        <span class="tab-links" onclick="openTab(event, 'vmap')">System Dashboard</span>
-        <span class="tab-links" onclick="openTab(event, 'cameraMap')">Camera Map</span>
+        <span class="tab-links" onclick="openTab(event, 'scene')">Test Scene</span>
+        <span class="tab-links" onclick="openTab(event, 'sysMap')">System Dashboard</span>
+        <span class="tab-links active" onclick="openTab(event, 'cameraMap')">Camera Map</span>
         <span class="tab-links" onclick="openTab(event, 'support')">Support</span>
         <div style="position: absolute; top: 10px; right: 10px; background-color: #f1f1f1; padding: 10px; border: 1px solid #ccc;" id="dateTimeBox">
             Loading date and time...
@@ -521,24 +878,25 @@
             setInterval(updateDateTime, 60000); // Update every 60 seconds
         </script>
     </div>
-    <div id="scene" class="tab active">
+    <div id="scene" class="tab">
         <div style="display: flex; flex-direction: column;">
         <div id="sceneContent" style="height: 600px; width: 80%;">
-            <gmp-map-3d mode="hybrid" center="37.915410, -122.334223" range="120" tilt="80" heading="290"></gmp-map-3d> 
-        </div>
+            <!--
+			<gmp-map-3d mode="hybrid" center="37.915410, -122.334223" range="120" tilt="80" heading="290"></gmp-map-3d> 
+			-->
+		</div>
         <div id="sceneContent2" style="height: 600px; width: 80%;">
-            <gmp-map-3d mode="hybrid" center="37.915627, -122.334860" range="60" tilt="80" heading="25"></gmp-map-3d> 
         </div> 
         </div>
         </div>
     </div>
-    <div id="vmap" class="tab">
+    <div id="sysMap" class="tab">
         <div style="display: flex; flex-direction: row; height: 100%;">
             <div style="flex: 1;">
                 <div id="sidebar"><ul id="intxnList"></ul></div>
             </div>
             <div style="flex: 2; display: flex; flex-direction: column;">
-                <div id="vmapContent" style="position: absolute; left: 10px; height: 640px; width: 640px; "></div>
+                <div id="sysMapContent" style="position: absolute; left: 10px; height: 640px; width: 640px; "></div>
                 <div id="msgStatsBox" class="state-box" style="position: absolute; margin-top: 660px; width: 600px;">
                     <h3>Message Statistics</h3>
                     <table id="msgStatsTable" style="width:80%; border-collapse: collapse;">
@@ -597,12 +955,28 @@
             </div>
         </div>
     </div>
-    <div id="cameraMap" class="tab">
+    <div id="cameraMap" class="tab active">
         <div style="padding: 16px;">
             <div id="cameraCount" class="state-box" style="margin-bottom: 16px; color: #0f172a; background-color: #f8fafc;">
                 Loading camera locations...
             </div>
             <div id="cameraMapContent" style="height: 720px; width: 100%; border: 2px solid #165391;"></div>
+            <div style="display: flex; align-items: center; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
+                <div id="driveCount" class="state-box" style="margin-top: 0; margin-bottom: 0; flex: 1; color: #0f172a; background-color: #f8fafc;">
+                    Loading vehicle trajectories...
+                </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                <label for="driveStartSlider" style="min-width: 100px; font-weight: 600; color: #165391;">Start Time</label>
+                <div class="slider-stack">
+                    <input id="driveStartSlider" type="range" min="0" max="0" step="60000" value="0" oninput="scheduleDriveWindowReload()" style="width: 100%; cursor: pointer; accent-color: #165391;">
+                    <div id="driveStartTicks" class="slider-ticks"></div>
+                </div>
+                <div id="driveStartLabel" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 360px; color: #0f172a; background-color: #f8fafc;">
+                    Loading time window...
+                </div>
+            </div>
+            <div id="driveMapContent" style="height: 560px; width: 100%; border: 2px solid #165391;"></div>
         </div>
     </div>
     <div id="support" class="tab">
