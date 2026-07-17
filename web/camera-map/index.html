@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Crowdsourced Cameras Map</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        html, body {
+            height: 100%;
+            margin: 0;
+            background: #f8fafc;
+            font-family: sans-serif;
+        }
+        .page-shell {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 16px;
+            background: #165391;
+            color: #ffffff;
+        }
+        .page-header h1 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .page-header a {
+            color: #dbeafe;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        .page-header a:hover {
+            text-decoration: underline;
+        }
+        .header-links {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        #cameraMapFrame {
+            flex: 1;
+            width: 100%;
+            border: 0;
+            background: #ffffff;
+        }
+    </style>
+    <script>
+        const DEFAULT_FRAME_HASH = '#cameraMap';
+
+        function hideEmbeddedTabs(frameDocument) {
+            frameDocument.querySelectorAll('.tab-links').forEach(link => {
+                link.style.display = 'none';
+            });
+        }
+
+        function getRequestedFrameHash() {
+            return window.location.hash || DEFAULT_FRAME_HASH;
+        }
+
+        function getRequestedFrameSource() {
+            return `./camera-map-source.html${getRequestedFrameHash()}`;
+        }
+
+        function syncEmbeddedCameraMapHash() {
+            const frame = document.getElementById('cameraMapFrame');
+            if (!frame) {
+                return;
+            }
+
+            const requestedHash = getRequestedFrameHash();
+
+            try {
+                const frameWindow = frame.contentWindow;
+                if (frameWindow && frameWindow.location.hash !== requestedHash) {
+                    frameWindow.location.hash = requestedHash;
+                    return;
+                }
+            } catch (error) {
+                console.error('Failed to update embedded camera map hash:', error);
+            }
+
+            if (frame.getAttribute('src') !== getRequestedFrameSource()) {
+                frame.setAttribute('src', getRequestedFrameSource());
+            }
+        }
+
+        function initializeEmbeddedCameraMap() {
+            const frame = document.getElementById('cameraMapFrame');
+            if (!frame) {
+                return;
+            }
+
+            try {
+                const frameWindow = frame.contentWindow;
+                const frameDocument = frame.contentDocument || frameWindow.document;
+                if (!frameDocument || !frameWindow) {
+                    return;
+                }
+
+                hideEmbeddedTabs(frameDocument);
+                syncEmbeddedCameraMapHash();
+            } catch (error) {
+                console.error('Failed to initialize embedded camera map:', error);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const frame = document.getElementById('cameraMapFrame');
+            if (!frame) {
+                return;
+            }
+
+            frame.setAttribute('src', getRequestedFrameSource());
+            frame.addEventListener('load', initializeEmbeddedCameraMap);
+        });
+
+        window.addEventListener('hashchange', () => {
+            syncEmbeddedCameraMapHash();
+        });
+    </script>
+</head>
+<body>
+    <div class="page-shell">
+        <div class="page-header">
+            <h1>Crowdsourced Cameras Map</h1>
+            <div class="header-links">
+                <a href="#camera">Camera</a>
+                <a href="#drive">Trajectories</a>
+                <a href="#heatmap">Heatmap</a>
+                <a href="../ecr/rfs.html#sysMap">Open main tabs page</a>
+            </div>
+        </div>
+        <iframe id="cameraMapFrame" src="./camera-map-source.html#cameraMap" title="Street Cameras"></iframe>
+    </div>
+</body>
+</html>

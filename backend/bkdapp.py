@@ -63,6 +63,63 @@ DRIVE_SOURCE_PATH = Path(__file__).resolve().parent.parent / 'maps' / 'xml'
 DRIVE_ORG_FILE = 'Get_Drives_All.json'
 DRIVE_FILTERED_FILE = 'Filtered_Get_Drives.json'
 DRIVE_WINDOW_MINUTES = driveFilter.DEFAULT_WINDOW_MINUTES
+DRIVE_WINDOW_OPTIONS = [30, 60, 180, 360, 720, 1440]
+DRIVE_HEATMAP_RADIUS_METERS = driveFilter.DEFAULT_GRID_PASS_RADIUS_METERS
+DRIVE_GRID_FILE = 'BayArea_Grid.json'
+IMAGE_DATA_PATH = Path(__file__).resolve().parent.parent / 'image-data'
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
+MAX_IMAGE_OFFSET = 180
+MAX_IMAGE_RESULTS = 30
+
+def load_viz_drive_heatmap_dates():
+    available_dates = []
+    for grid_passes_file in sorted(DRIVE_SOURCE_PATH.glob('BayArea_*_Grid_Passes.json')):
+        file_date = driveFilter.infer_drive_file_date(grid_passes_file.name)
+        if file_date:
+            available_dates.append(file_date)
+    return available_dates
+
+
+def parse_drive_image_file(image_path):
+    name_parts = image_path.stem.split('_')
+    if len(name_parts) < 2:
+        return None
+
+    vehicle_id = name_parts[0]
+    capture_time_text = name_parts[1]
+    try:
+        capture_time = datetime.strptime(capture_time_text, '%Y%m%d%H%M%S')
+    except ValueError:
+        return None
+
+    return {
+        'vehicle_id': vehicle_id,
+        'capture_time_text': capture_time_text,
+        'capture_time': capture_time,
+        'capture_time_iso': capture_time.isoformat(timespec='seconds') + 'Z',
+        'relative_path': image_path.relative_to(IMAGE_DATA_PATH).as_posix(),
+    }
+
+
+@lru_cache(maxsize=1)
+def load_drive_image_index():
+    if not IMAGE_DATA_PATH.exists():
+        return []
+
+    image_entries = []
+    for category_dir in sorted(IMAGE_DATA_PATH.iterdir()):
+        if not category_dir.is_dir():
+            continue
+
+        for image_path in sorted(category_dir.iterdir()):
+            if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_EXTENSIONS:
+                continue
+
+            parsed_entry = parse_drive_image_file(image_path)
+            if parsed_entry:
+                image_entries.append(parsed_entry)
+
+    return image_entries
 
 # Serve the API key
 @app.get('/api/key')
@@ -168,6 +225,20 @@ async def download_file(filename: str):
         return JSONResponse({"error": "File not found"}, status_code=404)
 
 
+@app.get('/api/viz_drive_image')
+async def get_viz_drive_image(relative_path: str):
+    resolved_image_path = (IMAGE_DATA_PATH / relative_path).resolve()
+    image_root_path = IMAGE_DATA_PATH.resolve()
+
+    if image_root_path not in resolved_image_path.parents:
+        return JSONResponse({"error": "Invalid image path"}, status_code=400)
+
+    if not resolved_image_path.exists() or not resolved_image_path.is_file():
+        return JSONResponse({"error": "Image not found"}, status_code=404)
+
+    return FileResponse(resolved_image_path)
+
+
 @lru_cache(maxsize=1)
 def load_viz_cameras():
     camera_file = Path(__file__).resolve().parent.parent / 'maps' / 'xml' / 'CamerasInPolygon.xml'
@@ -256,19 +327,100 @@ def load_viz_drives():
     }
 
 
+@lru_cache(maxsize=16)
+def load_drive_grid_passes(source_file_text):
+    source_file = Path(source_file_text)
+
+    if not source_file.exists():
+        raise FileNotFoundError('Drive grid pass JSON not found')
+
+    with source_file.open('r', encoding='utf-8') as handle:
+        return json.load(handle)
+
+
+@lru_cache(maxsize=32)
+def load_viz_drive_heatmap(source_file_text, online_only):
+    grid_passes_payload = load_drive_grid_passes(source_file_text)
+    heatmap_payload = driveFilter.build_drive_heatmap_from_grid_passes(grid_passes_payload, online_only=online_only)
+    heatmap_payload['summary']['source_file'] = Path(source_file_text).name
+    return heatmap_payload
+
+
+@lru_cache(maxsize=256)
+def load_viz_drive_heatmap_point_detail(source_file_text, point_lat, point_lng, online_only):
+    grid_passes_payload = load_drive_grid_passes(source_file_text)
+    point_detail = driveFilter.build_drive_heatmap_point_detail(
+        grid_passes_payload,
+        point_lat,
+        point_lng,
+        online_only=online_only,
+    )
+    if point_detail is None:
+        raise ValueError('Drive heatmap point not found')
+    point_detail['source_file'] = Path(source_file_text).name
+    return point_detail
+
+
+@lru_cache(maxsize=1)
+def load_viz_drive_grid():
+    grid_file = DRIVE_SOURCE_PATH / DRIVE_GRID_FILE
+
+    if not grid_file.exists():
+        raise FileNotFoundError('Drive grid JSON not found')
+
+    with grid_file.open('r', encoding='utf-8') as handle:
+        raw_grid_points = json.load(handle)
+
+    aggregated_points = {}
+    for point in raw_grid_points:
+        coordinates = point.get('coordinates', [])
+        if len(coordinates) < 2:
+            continue
+
+        direction = point.get('dir')
+        if direction is None:
+            continue
+
+        coord_key = (round(float(coordinates[0]), 6), round(float(coordinates[1]), 6))
+        if coord_key in aggregated_points:
+            continue
+
+        aggregated_points[coord_key] = {
+            'coordinates': [coord_key[0], coord_key[1]],
+            'dir': round(float(direction)),
+        }
+
+    grid_points = []
+    for point_state in aggregated_points.values():
+        grid_points.append(point_state)
+
+    return {
+        'points': grid_points,
+        'summary': {
+            'point_count': len(grid_points),
+            'source_file': grid_file.name,
+            'raw_point_count': len(raw_grid_points),
+        },
+    }
+
+
 def load_viz_drive_source_bounds():
     return driveFilter.DEFAULT_SOURCE_TIME_RANGE
 
 
-def build_drive_window(start_time_text=None):
+def build_drive_window(start_time_text=None, window_minutes=None):
     source_bounds = load_viz_drive_source_bounds()
     default_start = source_bounds.get('start')
     selected_start = start_time_text or default_start
     if not selected_start:
         raise ValueError('Drive source time range is unavailable')
 
+    selected_window_minutes = window_minutes or DRIVE_WINDOW_MINUTES
+    if selected_window_minutes not in DRIVE_WINDOW_OPTIONS:
+        raise ValueError('Unsupported drive window duration')
+
     start_dt = datetime.fromisoformat(selected_start.replace('Z', '+00:00'))
-    end_dt = start_dt + timedelta(minutes=DRIVE_WINDOW_MINUTES)
+    end_dt = start_dt + timedelta(minutes=selected_window_minutes)
     selected_end = end_dt.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
 
     source_end = source_bounds.get('end')
@@ -278,13 +430,13 @@ def build_drive_window(start_time_text=None):
     return {
         'start': selected_start,
         'end': selected_end,
+        'window_minutes': selected_window_minutes,
     }
 
 
-def refresh_viz_drives(start_time_text=None):
-    window = build_drive_window(start_time_text)
-    # get the date from the start time
-    filter_date = window['start'].split('T')[0]
+def refresh_viz_drives(start_time_text=None, window_minutes=None):
+    window = build_drive_window(start_time_text, window_minutes)
+    filter_date = driveFilter.get_source_file_date(window['start'])
     driveFilter.filter_drive_data(
         str(DRIVE_SOURCE_PATH / f"BayArea_{filter_date}_{DRIVE_ORG_FILE}"),
         str(DRIVE_SOURCE_PATH / DRIVE_FILTERED_FILE),
@@ -307,15 +459,17 @@ async def get_viz_cameras():
 
 
 @app.get('/api/viz_drives')
-async def get_viz_drives(reload: bool = False, start_time: str | None = None):
+async def get_viz_drives(reload: bool = False, start_time: str | None = None, window_minutes: int | None = None):
     try:
         source_bounds = load_viz_drive_source_bounds()
         window = None
-        if reload or start_time:
-            window = refresh_viz_drives(start_time)
+        selected_window_minutes = window_minutes or DRIVE_WINDOW_MINUTES
+        if reload or start_time or window_minutes:
+            window = refresh_viz_drives(start_time, selected_window_minutes)
 
         drive_payload = load_viz_drives()
-        drive_payload['summary']['window_minutes'] = DRIVE_WINDOW_MINUTES
+        drive_payload['summary']['window_minutes'] = window['window_minutes'] if window else selected_window_minutes
+        drive_payload['summary']['window_options'] = DRIVE_WINDOW_OPTIONS
         drive_payload['summary']['available_time_start'] = source_bounds.get('start')
         drive_payload['summary']['available_time_end'] = source_bounds.get('end')
         drive_payload['summary']['selected_time_start'] = window['start'] if window else drive_payload['summary'].get('time_start')
@@ -325,6 +479,127 @@ async def get_viz_drives(reload: bool = False, start_time: str | None = None):
         return JSONResponse({"error": "Drive trajectory JSON not found"}, status_code=404)
     except json.JSONDecodeError as exc:
         return JSONResponse({"error": f"Failed to parse drive trajectory JSON: {exc}"}, status_code=500)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get('/api/viz_drive_heatmap')
+async def get_viz_drive_heatmap(start_time: str | None = None, radius_meters: float | None = None, online_only: bool = False, date_text: str | None = None):
+    try:
+        source_bounds = load_viz_drive_source_bounds()
+        selected_start = start_time or source_bounds.get('start')
+        available_dates = load_viz_drive_heatmap_dates()
+        if date_text:
+            selected_date = date_text
+        elif selected_start:
+            selected_date = driveFilter.get_source_file_date(selected_start)
+        elif available_dates:
+            selected_date = available_dates[0]
+        else:
+            selected_date = None
+
+        if not selected_date:
+            raise ValueError('Drive source time range is unavailable')
+
+        if available_dates and selected_date not in available_dates:
+            raise ValueError(f'Drive heatmap data is unavailable for {selected_date}')
+
+        selected_radius_meters = radius_meters or DRIVE_HEATMAP_RADIUS_METERS
+        if abs(selected_radius_meters - DRIVE_HEATMAP_RADIUS_METERS) > 1e-9:
+            raise ValueError(f'Only precomputed radius {DRIVE_HEATMAP_RADIUS_METERS:g} m is available')
+
+        source_file = DRIVE_SOURCE_PATH / driveFilter.get_grid_passes_file_name(selected_date)
+        heatmap_payload = load_viz_drive_heatmap(str(source_file), online_only)
+        heatmap_payload['summary']['selected_time_start'] = selected_start
+        heatmap_payload['summary']['selected_date'] = selected_date
+        heatmap_payload['summary']['available_dates'] = available_dates
+        heatmap_payload['summary']['radius_threshold_meters'] = selected_radius_meters
+        heatmap_payload['summary']['online_only'] = online_only
+        return JSONResponse(heatmap_payload)
+    except FileNotFoundError:
+        return JSONResponse({"error": "Drive heatmap grid pass JSON not found"}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get('/api/viz_drive_heatmap_point')
+async def get_viz_drive_heatmap_point(lat: float, lng: float, online_only: bool = False, date_text: str | None = None):
+    try:
+        available_dates = load_viz_drive_heatmap_dates()
+        selected_date = date_text or (available_dates[0] if available_dates else None)
+        if not selected_date:
+            raise ValueError('Drive heatmap data is unavailable')
+
+        if available_dates and selected_date not in available_dates:
+            raise ValueError(f'Drive heatmap data is unavailable for {selected_date}')
+
+        source_file = DRIVE_SOURCE_PATH / driveFilter.get_grid_passes_file_name(selected_date)
+        point_detail = load_viz_drive_heatmap_point_detail(str(source_file), round(lat, 6), round(lng, 6), online_only)
+        return JSONResponse({
+            'point': point_detail,
+            'summary': {
+                'selected_date': selected_date,
+                'online_only': online_only,
+                'source_file': source_file.name,
+            },
+        })
+    except FileNotFoundError:
+        return JSONResponse({"error": "Drive heatmap grid pass JSON not found"}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get('/api/viz_drive_grid')
+async def get_viz_drive_grid():
+    try:
+        return JSONResponse(load_viz_drive_grid())
+    except FileNotFoundError:
+        return JSONResponse({"error": "Drive grid JSON not found"}, status_code=404)
+    except json.JSONDecodeError as exc:
+        return JSONResponse({"error": f"Failed to parse drive grid JSON: {exc}"}, status_code=500)
+
+
+@app.get('/api/viz_drive_images')
+async def get_viz_drive_images(vehicle_id: str, time_text: str, max_offset_seconds: int = MAX_IMAGE_OFFSET, max_results: int = MAX_IMAGE_RESULTS):
+    try:
+        if max_offset_seconds < 0:
+            raise ValueError('max_offset_seconds must be non-negative')
+        if max_results <= 0:
+            raise ValueError('max_results must be positive')
+
+        normalized_vehicle_id = str(vehicle_id).strip()
+        if not normalized_vehicle_id:
+            raise ValueError('vehicle_id is required')
+
+        target_time = datetime.fromisoformat(time_text.replace('Z', '+00:00')).replace(tzinfo=None)
+        image_matches = []
+
+        for image_entry in load_drive_image_index():
+            if image_entry['vehicle_id'] != normalized_vehicle_id:
+                continue
+
+            delta_seconds = (image_entry['capture_time'] - target_time).total_seconds()
+            if delta_seconds < 0 or delta_seconds > max_offset_seconds:
+                continue
+
+            image_matches.append({
+                'vehicle_id': image_entry['vehicle_id'],
+                'capture_time': image_entry['capture_time_iso'],
+                'capture_time_text': image_entry['capture_time_text'],
+                'relative_path': image_entry['relative_path'],
+                'delta_seconds': delta_seconds,
+                'url': f"/api/viz_drive_image?relative_path={image_entry['relative_path']}",
+            })
+
+        image_matches.sort(key=lambda image_match: (image_match['delta_seconds'], image_match['capture_time_text']))
+        limited_matches = image_matches[:min(max_results, MAX_IMAGE_RESULTS)]
+
+        return JSONResponse({
+            'vehicle_id': normalized_vehicle_id,
+            'time_text': time_text,
+            'max_offset_seconds': max_offset_seconds,
+            'images': limited_matches,
+        })
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
