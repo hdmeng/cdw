@@ -3,7 +3,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Connected Vehicle Applications Demo</title>
+    <title>Probe Camera Maps</title>
     <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
     <style>
         .tab {
@@ -67,21 +67,54 @@
         .slider-ticks {
             display: flex;
             justify-content: space-between;
+            align-items: flex-start;
             font-size: 11px;
             color: #475569;
-            padding: 0 2px;
+            margin-top: 4px;
+            gap: 8px;
         }
         .slider-tick {
             border: 0;
-            padding: 0;
+            padding: 6px 10px;
             background: transparent;
             color: inherit;
             font: inherit;
+            line-height: 1.2;
             cursor: pointer;
+            white-space: nowrap;
+            border-radius: 8px;
         }
         .slider-tick.is-selected {
             font-weight: 700;
             color: #0f172a;
+            background: #dbeafe;
+        }
+        .heatmap-date-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .heatmap-date-bar .slider-tick {
+            font-size: 15px;
+            border: 1px solid #cbd5e1;
+            background: #f8fafc;
+        }
+        .heatmap-date-bar .slider-tick.is-selected {
+            border-color: #165391;
+            color: #165391;
+            background: #dbeafe;
+        }
+        .map-division {
+            scroll-margin-top: 20px;
+        }
+        .map-division + .map-division {
+            margin-top: 24px;
+        }
+        .map-division-heading {
+            margin: 0 0 8px;
+            color: #165391;
+            font-size: 20px;
         }
         .map-section-divider {
             height: 0;
@@ -155,13 +188,56 @@
         .switch-control input:checked ~ .switch-copy::after {
             content: 'ON';
         }
+        .heatmap-legend {
+            margin: 14px;
+            padding: 10px 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.96);
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+            color: #0f172a;
+            font: 12px/1.4 sans-serif;
+        }
+        .heatmap-legend-title {
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+        .heatmap-legend-row {
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        .heatmap-legend-scale {
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .heatmap-legend-swatch {
+            width: 16px;
+            height: 18px;
+            flex: 0 0 auto;
+        }
+        .heatmap-legend-labels {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 2px;
+        }
+        .heatmap-legend-label {
+            min-height: 18px;
+            display: flex;
+            align-items: center;
+        }
     </style>
     <script>
         const API_BASE = window.location.protocol === 'https:'
             ? '/backend'
             : `http://${window.location.hostname}:5000`;
-        const SOCKET_PORT = 5000;
-
+        
+		// const SOCKET_PORT = 5000;
         // Connect to the WebSocket server
         // const socket = io(`${SERVER_URL}:${SOCKET_PORT}`, { 
         //    secure: false
@@ -180,6 +256,9 @@
         let drivePolylines = [];
         let driveBounds;
         let driveInfoWindow;
+        let driveInfoImageRequestKey = null;
+        let driveInfoImageCarouselState = new Map();
+        let driveInfoImageMatchCache = new Map();
         let driveHeatmap;
         let driveHeatmapDataPromise;
         let driveHeatmapMarkers = [];
@@ -188,6 +267,8 @@
         let driveHeatmapVisiblePointCount = 0;
         let driveHeatmapPointDetailCache = new Map();
         let driveHeatmapDates = [];
+        let driveHeatmapSelectedDate = null;
+        let driveHeatmapLegend;
         let driveGridLines = [];
         let driveHeatmapInfoWindow;
         let driveHeatmapInfoPoint = null;
@@ -204,15 +285,21 @@
         let sysMap_notloaded = true;
         const DRIVE_HEATMAP_POINT_SCALE = 4.5;
         const DRIVE_HEATMAP_RENDER_MIN_ZOOM = 11;
-        const DRIVE_HEATMAP_INFO_MIN_ZOOM = 13;
+        const DRIVE_HEATMAP_INFO_MIN_ZOOM = 11;
         const ENABLE_DRIVE_HEATMAP = true;
-        const TAB_NAMES = new Set(['scene', 'sysMap', 'support']);
-
-        const lineColor = {
-            64: 'green',    // egress 
-            128:'blue',    // ingress
-            192: 'orange' // bi-directional
-        };
+        const TAB_NAMES = new Set(['scene', 'sysMap', 'cameraMap', 'support']);
+        const CAMERA_MAP_SECTION_SCROLL_OFFSET = 16;
+        const CAMERA_MAP_SECTION_IDS = new Map([
+            ['camera', 'camera'],
+            ['camera-map', 'camera'],
+            ['drive', 'drive'],
+            ['drive-map', 'drive'],
+            ['trajectory', 'drive'],
+            ['trajectories', 'drive'],
+            ['heatmap', 'heatmap'],
+            ['drive-heatmap', 'heatmap']
+        ]);
+		const DEFAULT_IMAGE_OFFSET_SECONDS = 180;
 
         async function importGMPLib() {
             const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
@@ -280,204 +367,6 @@
             }
         }
 
-        async function genIntxnList() {
-            try {
-                const site = 'RFS'; // or 'ECR', depending on the desired site
-                const response = await fetch(`${API_BASE}/api/intxn_list?site=${site}`);
-                const intxns = await response.json();
-                if (sysMap_notloaded) {
-                    populateSidebar(intxns);
-                }
-                // set the tab notloaded flag to false
-                sysMap_notloaded = false;
-             } catch (error) {
-            console.error('Error fetching intersection list:', error);
-            }
-        }
-
-        let lastListItem = null;
-        let lastMarker = null;
-
-        async function populateSidebar(intxns) {
-            // import marker library
-            // const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
-
-            const intxnList = document.getElementById('intxnList');
-            intxns.forEach(intxn => {
-                const listItem = document.createElement('li');
-                listItem.textContent = intxn.name;
-                listItem.addEventListener('click', () => {
-                    // set the map center to the selected intersection
-                    map.setCenter(intxn.center);
-                    map.setZoom(19);
-                    
-                    // Add intersection name text at the map center using Marker
-                    if (lastMarker) {
-                        lastMarker.setMap(null); // Remove the previous marker
-                    }
-                    // const marker = new AdvancedMarkerElement({
-                    const marker = new google.maps.Marker({
-                    
-                        position: intxn.center,
-                        map: map,
-                        label: {
-                            text: intxn.name,
-                            color: 'white',
-                            fontSize: '15px',
-                            fontWeight: 'bold'
-                        },
-                        // icon: svgMarker
-                        
-                    });
-                    lastMarker = marker;
-
-                    // add lanes to the map
-                    addLanes(intxn.name);
-
-                    // show RSU states 
-                    showRSUStatus();
-                    // show SPAT states
-                    showSPATStatus();
-                    // show MEC states
-                    showMECStatus();
-
-                    // change the text color back of the last selected item
-                    if (lastListItem) {
-                        lastListItem.style.color = 'white';
-                    }
-                    // change the text color of the selected item
-                    listItem.style.color = 'red';
-                    lastListItem = listItem;
-                });
-                intxnList.appendChild(listItem);
-            });
-        }
-
-        async function addLanes(selIntxnName) {
-            try {
-                // add lane lines
-                const response = await fetch(`${API_BASE}/api/intxn_lanes`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ name: selIntxnName})
-                });
-
-                const laneLines = await response.json();
-                laneLines.forEach(laneLine => {
-                    const line = new google.maps.Polyline({
-                        path: laneLine.points.map(coord => new google.maps.LatLng(coord.lat, coord.lng)),
-                        geodesic: true,
-                        strokeColor: lineColor[laneLine.dir] || 'red',
-                        strokeOpacity: 0.8,
-                        strokeWeight: 2
-                    });
-                    line.setMap(map);
-                });
-            } catch (error) {
-                console.error('Error obtaining lanes:', error);
-            }    
-
-        }
-
-        // Show RSU state getting from "rsu_state" endpoint 
-        async function showRSUStatus() {
-            try {
-                // socket.on('rsu_state', (data) => {
-                //     const rsuStatus = document.getElementById('rsuStatus');
-                //     rsuStatus.innerHTML = `<h3>RSU State</h3>
-                //         <p>Timestamp: ${data.time_msec}</p>
-                //         <p>RSU ID: ${data.rsu_port}</p>`;
-                // });
-                const intervalId = setInterval(async () => {
-                // Replace with your API call
-                    await fetch(`${API_BASE}/api/rsu_state?nodeid=rfs-coin`)
-                        .then(response => response.json())
-                        .then(data => {
-                            const rsuStatus = document.getElementById('rsuStatus');
-                            rsuStatus.innerHTML = `<h3>RSU State</h3>
-                                <p>Timestamp: ${data.time_msec}</p>
-                                <p>RSU Mode: ${data.radio_mode}</p>
-                                <p>RSU Enabled: ${data.radio_enable}</p>`;
-                        });
-                }, 5000); // Calls every 5 seconds
-            } catch (error) {
-                console.error('Error getting RSU state:', error);
-            }
-        }
-
-        // Show Controller state getting from "tsc_state" endpoint
-        async function showSPATStatus() {
-            try {
-                
-                const intervalId = setInterval(async () => {
-                // Replace with your API call
-                    await fetch(`${API_BASE}/api/tsc_state?intxnid=1000`)
-                        .then(response => response.json())
-                        .then(data => {
-                            const ctrlStatus = document.getElementById('ctrlStatus');
-                            ctrlStatus.innerHTML = `<h3>TSC State</h3>
-                                <p>TSC Timestamp: ${data.time_msec}</p>
-                                <p> V2 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph2==='Green'?'green' : data.Ph2==='Yellow'?'yellow' : data.Ph2==='Red'?'red' : 'gray'};">
-                                    </span>
-                                    V4 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph4==='Green'?'green' : data.Ph4==='Yellow'?'yellow' : data.Ph4==='Red'?'red' : 'gray'};">
-                                    </span>
-                                    V6 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph6==='Green'?'green' : data.Ph6==='Yellow'?'yellow' : data.Ph6==='Red'?'red' : 'gray'};">
-                                    </span>
-                                    V8 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph8==='Green'?'green' : data.Ph8==='Yellow'?'yellow' : data.Ph8==='Red'?'red' : 'gray'};">
-                                    </span>
-                                </p>
-                                <p> P2 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph10==='Green'?'green' : data.Ph10==='Yellow'?'yellow' : data.Ph10==='Red'?'red' : 'gray'};">
-                                    </span>
-                                    P4 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph12==='Green'?'green' : data.Ph12==='Yellow'?'yellow' : data.Ph12==='Red'?'red' : 'gray'};">
-                                    </span>
-                                    P6 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph14==='Green'?'green' : data.Ph14==='Yellow'?'yellow' : data.Ph14==='Red'?'red' : 'gray'};">
-                                    </span>
-                                    P8 <span class="signal-indicator" 
-                                    style="background-color:${data.Ph16==='Green'?'green' : data.Ph16==='Yellow'?'yellow' : data.Ph16==='Red'?'red' : 'gray'};">
-                                    </span>
-                                </p>`;
-                        });
-                }, 1000); // Calls every 1 seconds
-            } catch (error) {
-                console.error('Error getting SPAT info:', error);
-            }
-        }
-        
-        // Show MEC state getting from "rsp_state" in the rsuStatus div
-        async function showMECStatus() {
-            try {
-                const intervalId = setInterval(async () => {
-                // Replace with your API call
-                    await fetch(`${API_BASE}/api/rsp_state?nodeid=rfs-coin`)
-                        .then(response => response.json())
-                        .then(data => {
-                            const mecStatus = document.getElementById('mecStatus');
-                            mecStatus.innerHTML = `<h3>MultiAccess Edge Computing State</h3>
-                                <p>Site Name: ${data.SiteName}</p>
-                                <p>Operating Functions: 
-                                    MrpSpat: <span style="color:green;"> ${data.OprFuncs.MrpSpat}</span>  
-                                    MrpAware: ${data.OprFuncs.MrpAware} 
-                                    MsgFwd: <span style="color:green;"> ${data.OprFuncs.MsgFwd} </span>
-                                    Tci: ${data.OprFuncs.Tci} 
-                                    DataMgr: ${data.OprFuncs.DataMgr}
-                                    Sensor: ${data.OprFuncs.Sensor} 
-                                    RTCM: ${data.OprFuncs.RTCM} 
-                                </p>`;
-                        });
-                }, 5000); // Calls every 5 seconds
-            } catch (error) {
-                console.error('Error getting RSP state:', error);
-            }
-        }
 
         async function mapValidate() {
             try {
@@ -728,6 +617,11 @@
             driveHeatmapVisiblePointCount = 0;
         }
 
+        function getSelectedHeatmapConnectionMode() {
+            const connectionSelect = document.getElementById('driveHeatmapConnectionSelect');
+            return connectionSelect ? connectionSelect.value : 'all';
+        }
+
         function getDriveHeatmapVisiblePoints() {
             if (!driveHeatmap || !driveHeatmapPoints.length) {
                 return [];
@@ -752,6 +646,10 @@
             const crossesDateLine = minLng > maxLng;
 
             return driveHeatmapPoints.filter(point => {
+                if (driveHeatmapSummary.online_only && (point.count || 0) <= 0) {
+                    return false;
+                }
+
                 const inLat = point.lat >= minLat && point.lat <= maxLat;
                 const inLng = crossesDateLine
                     ? point.lng >= minLng || point.lng <= maxLng
@@ -768,13 +666,14 @@
 
             const summary = driveHeatmapSummary || {};
             const totalPassCount = summary.total_pass_count ?? driveHeatmapPoints.reduce((sum, point) => sum + (point.count || 0), 0);
-            const connectionLabel = summary.online_only ? 'online only' : 'online and offline';
+            const connectionLabel = summary.online_only ? 'online only' : 'all data';
             const zoom = driveHeatmap ? (driveHeatmap.getZoom() || 0) : 0;
             const renderStatus = zoom < DRIVE_HEATMAP_RENDER_MIN_ZOOM
                 ? `zoom in to ${DRIVE_HEATMAP_RENDER_MIN_ZOOM}+ to render points`
                 : `${driveHeatmapVisiblePointCount} visible points rendered`;
 
-            heatmapCount.textContent = `Daily roadway pass heatmap for ${summary.selected_date || 'n/a'}: ${summary.grid_point_count ?? driveHeatmapPoints.length} grid points, ${summary.active_point_count ?? driveHeatmapPoints.length} active, ${renderStatus}, ${connectionLabel}, total pass hits ${totalPassCount}, max pass count ${summary.max_count ?? 0}`;
+            // heatmapCount.textContent = `Daily roadway pass heatmap for ${summary.selected_date || 'n/a'}: ${summary.grid_point_count ?? driveHeatmapPoints.length} grid points, ${summary.active_point_count ?? driveHeatmapPoints.length} active, ${renderStatus}, ${connectionLabel}, total pass hits ${totalPassCount}, max probe count ${summary.max_count ?? 0}`;
+        	heatmapCount.textContent = `Daily roadway probings heatmap for ${summary.selected_date || 'n/a'}: ${summary.grid_point_count ?? driveHeatmapPoints.length} grid points; ${connectionLabel}; Total pass hits ${totalPassCount}, max probe count ${summary.max_count ?? 0}`;
         }
 
         function updateDriveHeatmapViewport() {
@@ -822,7 +721,7 @@
             }
 
             const zoom = driveHeatmap.getZoom() || 0;
-            if (zoom <= DRIVE_HEATMAP_INFO_MIN_ZOOM) {
+            if (zoom < DRIVE_HEATMAP_INFO_MIN_ZOOM) {
                 return false;
             }
 
@@ -856,7 +755,125 @@
             }
         }
 
-        function buildDriveInfo(traj) {
+        function stopDriveInfoImagePlayback(carouselId) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || !carouselState.intervalId) {
+                return;
+            }
+
+            clearInterval(carouselState.intervalId);
+            carouselState.intervalId = null;
+        }
+
+        function resetDriveInfoImageCarousels() {
+            driveInfoImageCarouselState.forEach((_, carouselId) => {
+                stopDriveInfoImagePlayback(carouselId);
+            });
+            driveInfoImageCarouselState.clear();
+        }
+
+        function resolveDriveInfoImageUrl(imageUrl) {
+            if (!imageUrl) {
+                return '';
+            }
+
+            if (/^https?:\/\//i.test(imageUrl)) {
+                return imageUrl;
+            }
+
+            if (imageUrl.startsWith('/')) {
+                return `${API_BASE}${imageUrl}`;
+            }
+
+            return `${API_BASE}/${imageUrl}`;
+        }
+
+        function updateDriveInfoImageCarousel(carouselId) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || !carouselState.images.length) {
+                return;
+            }
+
+            const imageFrame = document.getElementById(`${carouselId}-image`);
+            const imageMeta = document.getElementById(`${carouselId}-meta`);
+            const imageCounter = document.getElementById(`${carouselId}-counter`);
+            const playButton = document.getElementById(`${carouselId}-play`);
+            if (!imageFrame || !imageMeta || !imageCounter) {
+                return;
+            }
+
+            const selectedImage = carouselState.images[carouselState.index];
+            imageFrame.src = resolveDriveInfoImageUrl(selectedImage.url);
+            imageFrame.alt = `Vehicle ${selectedImage.vehicle_id} captured at ${selectedImage.capture_time}`;
+            imageMeta.textContent = `Captured ${selectedImage.capture_time} (${selectedImage.delta_seconds.toFixed(1)}s from probe time)`;
+            imageCounter.textContent = `${carouselState.index + 1} / ${carouselState.images.length}`;
+            if (playButton) {
+                playButton.textContent = carouselState.intervalId ? 'Pause' : 'Play';
+            }
+        }
+
+        function stepDriveInfoImageCarousel(carouselId, delta) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || !carouselState.images.length) {
+                return;
+            }
+
+            const imageCount = carouselState.images.length;
+            carouselState.index = (carouselState.index + delta + imageCount) % imageCount;
+            updateDriveInfoImageCarousel(carouselId);
+        }
+
+        function toggleDriveInfoImagePlayback(carouselId) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || carouselState.images.length <= 1) {
+                return;
+            }
+
+            if (carouselState.intervalId) {
+                stopDriveInfoImagePlayback(carouselId);
+                updateDriveInfoImageCarousel(carouselId);
+                return;
+            }
+
+            carouselState.intervalId = setInterval(() => {
+                stepDriveInfoImageCarousel(carouselId, 1);
+            }, 1000);
+            updateDriveInfoImageCarousel(carouselId);
+        }
+
+        function buildDriveInfoImageSection(imagePayload, carouselId) {
+            if (!imagePayload) {
+                return '<div style="margin-top: 8px; color: #475569;">Loading matched images...</div>';
+            }
+
+            const images = Array.isArray(imagePayload.images) ? imagePayload.images : [];
+            if (images.length === 0) {
+                return '<div style="margin-top: 8px; color: #475569;">No matching images found.</div>';
+            }
+
+            const firstImage = images[0];
+            const controlsDisabled = images.length <= 1 ? 'disabled' : '';
+            return `
+                <div style="margin-top: 10px; min-width: 240px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;">
+                        <strong>Matched Images</strong>
+                        <span id="${carouselId}-counter">1 / ${images.length}</span>
+                    </div>
+                    <div style="border: 1px solid #cbd5e1; border-radius: 10px; overflow: hidden; background: #f8fafc;">
+                        <img id="${carouselId}-image" src="${resolveDriveInfoImageUrl(firstImage.url)}" alt="Vehicle ${firstImage.vehicle_id} captured at ${firstImage.capture_time}" style="display: block; width: 100%; max-width: 320px; height: auto; background: #e2e8f0;">
+                    </div>
+                    <div id="${carouselId}-meta" style="margin-top: 6px; color: #475569;">Captured ${firstImage.capture_time} (${firstImage.delta_seconds.toFixed(1)}s from probe time)</div>
+                    <div style="display: flex; gap: 8px; margin-top: 8px;">
+                        <button type="button" onclick="stepDriveInfoImageCarousel('${carouselId}', -1)" ${controlsDisabled}>Prev</button>
+                        <button id="${carouselId}-play" type="button" onclick="toggleDriveInfoImagePlayback('${carouselId}')" ${controlsDisabled}>Play</button>
+                        <button type="button" onclick="stepDriveInfoImageCarousel('${carouselId}', 1)" ${controlsDisabled}>Next</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function buildDriveInfo(traj, imagePayload = null, carouselId = null) {
+            const imageSectionHtml = carouselId ? buildDriveInfoImageSection(imagePayload, carouselId) : '';
             return `
                 <div style="min-width:220px; line-height:1.5;">
                     <strong>Vehicle ${traj.vehicle_id || 'n/a'}</strong><br>
@@ -865,8 +882,72 @@
                     Seconds: ${traj.seconds ?? 'n/a'}<br>
                     Time: ${traj.time || 'n/a'}<br>
                     Online: ${traj.online ? 'Yes' : 'No'}
+                    ${imageSectionHtml}
                 </div>
             `;
+        }
+
+        async function openDriveInfo(traj, position) {
+            if (!driveInfoWindow) {
+                driveInfoWindow = new google.maps.InfoWindow();
+                driveInfoWindow.addListener('closeclick', () => {
+                    driveInfoImageRequestKey = null;
+                    resetDriveInfoImageCarousels();
+                });
+            }
+
+            resetDriveInfoImageCarousels();
+            const maxImageOffsetSeconds = Number.isFinite(Number(traj.seconds)) ? Math.max(DEFAULT_IMAGE_OFFSET_SECONDS, Number(traj.seconds)) : DEFAULT_IMAGE_OFFSET_SECONDS;
+            const cacheKey = `${traj.vehicle_id || 'none'}|${traj.time || 'none'}|${maxImageOffsetSeconds}`;
+            const carouselId = `drive-info-carousel-${String(traj.vehicle_id || 'none').replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}`;
+            driveInfoImageRequestKey = cacheKey;
+            driveInfoWindow.setContent(buildDriveInfo(traj, null, carouselId));
+            driveInfoWindow.setPosition(position);
+            driveInfoWindow.open(driveMap);
+
+            if (!traj.vehicle_id || !traj.time) {
+                driveInfoWindow.setContent(buildDriveInfo(traj, { images: [] }, carouselId));
+                return;
+            }
+
+            if (!driveInfoImageMatchCache.has(cacheKey)) {
+                const imageUrl = `${API_BASE}/api/viz_drive_images?vehicle_id=${encodeURIComponent(traj.vehicle_id)}&time_text=${encodeURIComponent(traj.time)}&max_offset_seconds=${encodeURIComponent(maxImageOffsetSeconds)}`;
+                driveInfoImageMatchCache.set(cacheKey, fetch(imageUrl).then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Drive image API returned ${response.status}`);
+                    }
+                    return response.json();
+                }));
+            }
+
+            try {
+                const imagePayload = await driveInfoImageMatchCache.get(cacheKey);
+                if (driveInfoImageRequestKey !== cacheKey) {
+                    return;
+                }
+
+                driveInfoWindow.setContent(buildDriveInfo(traj, imagePayload, carouselId));
+                driveInfoWindow.setPosition(position);
+                driveInfoWindow.open(driveMap);
+
+                const images = Array.isArray(imagePayload.images) ? imagePayload.images : [];
+                if (images.length > 0) {
+                    driveInfoImageCarouselState.set(carouselId, {
+                        images,
+                        index: 0,
+                        intervalId: null,
+                    });
+                    updateDriveInfoImageCarousel(carouselId);
+                }
+            } catch (error) {
+                if (driveInfoImageRequestKey !== cacheKey) {
+                    return;
+                }
+
+                driveInfoWindow.setContent(`${buildDriveInfo(traj)}<div style="margin-top: 8px; color: #b91c1c;">${error.message}</div>`);
+                driveInfoWindow.setPosition(position);
+                driveInfoWindow.open(driveMap);
+            }
         }
 
         function getTrajectoryColor(vehicleId) {
@@ -911,6 +992,39 @@
             return DRIVE_HEATMAP_POINT_SCALE;
         }
 
+        function ensureDriveHeatmapLegend() {
+            if (!driveHeatmap || driveHeatmapLegend) {
+                return;
+            }
+
+            const legend = document.createElement('div');
+            legend.className = 'heatmap-legend';
+            legend.innerHTML = `
+                <div class="heatmap-legend-title">Probes Count</div>
+                <div class="heatmap-legend-row">
+                    <div class="heatmap-legend-scale" aria-hidden="true">
+                        <span class="heatmap-legend-swatch" style="background:#cbd5e1"></span>
+                        <span class="heatmap-legend-swatch" style="background:#93c5fd"></span>
+                        <span class="heatmap-legend-swatch" style="background:#60a5fa"></span>
+                        <span class="heatmap-legend-swatch" style="background:#34d399"></span>
+                        <span class="heatmap-legend-swatch" style="background:#f59e0b"></span>
+                        <span class="heatmap-legend-swatch" style="background:#dc2626"></span>
+                    </div>
+                    <div class="heatmap-legend-labels">
+                        <span class="heatmap-legend-label">0</span>
+                        <span class="heatmap-legend-label">1-3</span>
+                        <span class="heatmap-legend-label">4-6</span>
+                        <span class="heatmap-legend-label">7-9</span>
+                        <span class="heatmap-legend-label">10-11</span>
+                        <span class="heatmap-legend-label">12+</span>
+                    </div>
+                </div>
+            `;
+
+            driveHeatmap.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
+            driveHeatmapLegend = legend;
+        }
+
         function projectHeadingPoint(lat, lng, headingDegrees, distanceMeters) {
             const headingRadians = (Number(headingDegrees) * Math.PI) / 180;
             const deltaNorthMeters = Math.cos(headingRadians) * distanceMeters;
@@ -929,11 +1043,11 @@
                 <div style="min-width:220px; line-height:1.5;">
                     <strong>Roadway Pass Count</strong><br>
                     Passes: ${point.count}<br>
-                    Grid Direction: ${point.dir ?? 'n/a'}<br>
+                    <!-- Grid Direction: ${point.dir ?? 'n/a'}<br> -->
                     Vehicles: ${point.vehicle_count ?? 'n/a'}<br>
                     First Pass: ${point.first_time || 'n/a'}<br>
                     Last Pass: ${point.last_time || 'n/a'}<br>
-                    Connection Mode: ${summary.online_only ? 'online only' : 'online and offline'}<br>
+                    Mode Filtered: ${summary.online_only ? 'online only' : 'online & offline'}<br>
                     Radius Threshold: ${summary.radius_threshold_meters ?? 'n/a'} m<br>
                     Source File: ${summary.source_file || 'n/a'}
                 </div>
@@ -952,7 +1066,7 @@
                     Vehicles: ${point.vehicle_count ?? 'n/a'}<br>
                     First Pass: ${point.first_time || 'n/a'}<br>
                     Last Pass: ${point.last_time || 'n/a'}<br>
-                    Connection Mode: ${summary.online_only ? 'online only' : 'online and offline'}<br>
+                    Mode Filtered: ${summary.online_only ? 'online only' : 'all data'}<br>
                     Source File: ${summary.source_file || 'n/a'}<br>
                     <div style="margin-top: 8px;"><strong>Vehicles Passed</strong></div>
                     <div style="max-height: 180px; overflow-y: auto; border: 1px solid #cbd5e1; padding: 6px; background: #f8fafc;">${vehicleList}</div>
@@ -970,7 +1084,7 @@
             }
 
             const selectedDate = driveHeatmapSummary.selected_date || getSelectedDriveHeatmapDate();
-            const onlineOnly = getSelectedDriveConnectionMode() === 'online';
+            const onlineOnly = getSelectedHeatmapConnectionMode() === 'online';
             const cacheKey = `${selectedDate || 'none'}|${onlineOnly ? '1' : '0'}|${point.lat}|${point.lng}`;
             const baseSummary = {
                 ...driveHeatmapSummary,
@@ -1013,29 +1127,26 @@
         }
 
         function getSelectedDriveHeatmapDate() {
-            const slider = document.getElementById('driveHeatmapDateSlider');
-            if (!slider || !driveHeatmapDates.length) {
+            if (!driveHeatmapDates.length) {
                 return null;
             }
 
-            const selectedIndex = Math.min(
-                Math.max(Number(slider.value || 0), 0),
-                Math.max(driveHeatmapDates.length - 1, 0)
-            );
-            return driveHeatmapDates[selectedIndex] || null;
+            if (driveHeatmapSelectedDate && driveHeatmapDates.includes(driveHeatmapSelectedDate)) {
+                return driveHeatmapSelectedDate;
+            }
+
+            return driveHeatmapDates[0] || null;
+        }
+
+        function formatHeatmapDateButtonLabel(dateText) {
+            const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            const dateValue = new Date(`${dateText}T00:00:00Z`);
+            const weekday = weekdayNames[dateValue.getUTCDay()] || '';
+            return `${weekday} ${dateText.slice(5)}`;
         }
 
         function updateDriveHeatmapDateLabel() {
-            const label = document.getElementById('driveHeatmapDateLabel');
             const selectedDate = getSelectedDriveHeatmapDate();
-            const slider = document.getElementById('driveHeatmapDateSlider');
-            if (label) {
-                label.textContent = selectedDate || 'No date available';
-            }
-            if (slider) {
-                slider.setAttribute('aria-label', selectedDate ? `Heatmap Date ${selectedDate}` : 'Heatmap Date');
-            }
-
             const tickContainer = document.getElementById('driveHeatmapDateTicks');
             if (!tickContainer) {
                 return;
@@ -1059,15 +1170,11 @@
                 const tick = document.createElement('button');
                 tick.type = 'button';
                 tick.className = 'slider-tick';
-                tick.textContent = dateText.slice(5);
+                tick.textContent = formatHeatmapDateButtonLabel(dateText);
+                tick.setAttribute('aria-label', `Heatmap Date ${dateText}`);
                 tick.onclick = () => {
-                    const slider = document.getElementById('driveHeatmapDateSlider');
-                    if (!slider) {
-                        return;
-                    }
-
-                    slider.value = String(index);
-                    handleDriveHeatmapDateSliderInput();
+                    driveHeatmapSelectedDate = driveHeatmapDates[index] || null;
+                    handleDriveHeatmapDateSelection();
                 };
                 tickContainer.appendChild(tick);
             });
@@ -1076,37 +1183,26 @@
         }
 
         function updateDriveHeatmapDateSlider(summary) {
-            const slider = document.getElementById('driveHeatmapDateSlider');
-            if (!slider) {
-                return;
-            }
-
             const availableDates = Array.isArray(summary.available_dates) ? summary.available_dates : [];
             if (availableDates.length === 0) {
                 driveHeatmapDates = [];
-                slider.disabled = true;
+                driveHeatmapSelectedDate = null;
                 updateDriveHeatmapDateTicks();
                 updateDriveHeatmapDateLabel();
                 return;
             }
 
             driveHeatmapDates = availableDates.slice();
-            slider.disabled = false;
-            slider.min = '0';
-            slider.max = String(Math.max(driveHeatmapDates.length - 1, 0));
-            slider.step = '1';
-            updateDriveHeatmapDateTicks();
-
             const currentDate = getSelectedDriveHeatmapDate();
             const desiredDate = (currentDate && driveHeatmapDates.includes(currentDate))
                 ? currentDate
                 : (summary.selected_date || driveHeatmapDates[0]);
-            const selectedIndex = Math.max(driveHeatmapDates.indexOf(desiredDate), 0);
-            slider.value = String(selectedIndex);
+            driveHeatmapSelectedDate = desiredDate;
+            updateDriveHeatmapDateTicks();
             updateDriveHeatmapDateLabel();
         }
 
-        function handleDriveHeatmapDateSliderInput() {
+        function handleDriveHeatmapDateSelection() {
             updateDriveHeatmapDateLabel();
             if (driveHeatmapReloadTimer) {
                 clearTimeout(driveHeatmapReloadTimer);
@@ -1124,12 +1220,7 @@
             }, 250);
         }
 
-        function handleDriveHeatmapDateSliderChange() {
-            if (driveHeatmapReloadTimer) {
-                clearTimeout(driveHeatmapReloadTimer);
-                driveHeatmapReloadTimer = null;
-            }
-            updateDriveHeatmapDateLabel();
+        function handleDriveHeatmapConnectionSelect() {
             driveHeatmapDataPromise = null;
             driveHeatmapPointDetailCache.clear();
             clearDriveHeatmapMarkers();
@@ -1415,9 +1506,7 @@
                     });
 
                     polyline.addListener('click', event => {
-                        driveInfoWindow.setContent(buildDriveInfo(traj));
-                        driveInfoWindow.setPosition(event.latLng);
-                        driveInfoWindow.open(driveMap);
+                        openDriveInfo(traj, event.latLng);
                     });
 
                     drivePolylines.push(polyline);
@@ -1453,7 +1542,7 @@
                     }
                     const heatmapCount = document.getElementById('driveHeatmapCount');
                     if (heatmapCount) {
-                        heatmapCount.textContent = 'Daily roadway pass heatmap rendering is temporarily disabled.';
+                        heatmapCount.textContent = 'Daily roadway probings heatmap rendering is temporarily disabled.';
                     }
                     return;
                 }
@@ -1465,7 +1554,7 @@
 
                 const heatmapCount = document.getElementById('driveHeatmapCount');
                 const mapContainer = document.getElementById('driveHeatmapContent');
-                heatmapCount.textContent = 'Loading daily roadway pass heatmap...';
+                heatmapCount.textContent = 'Loading daily roadway probings heatmap...';
 
                 if (!driveHeatmap) {
                     driveHeatmap = new google.maps.Map(mapContainer, {
@@ -1473,6 +1562,7 @@
                         center: { lat: 37.75, lng: -122.2 },
                         mapTypeId: 'satellite'
                     });
+                    ensureDriveHeatmapLegend();
                     driveHeatmap.addListener('idle', () => {
                         updateDriveHeatmapViewport();
                         syncDriveHeatmapInfoWindowVisibility();
@@ -1484,7 +1574,7 @@
                 }
 
                 if (!driveHeatmapDataPromise) {
-                    const onlineOnly = getSelectedDriveConnectionMode() === 'online';
+                    const onlineOnly = getSelectedHeatmapConnectionMode() === 'online';
                     const selectedDate = getSelectedDriveHeatmapDate();
                     const heatmapUrl = selectedDate
                         ? `${API_BASE}/api/viz_drive_heatmap?date_text=${encodeURIComponent(selectedDate)}&online_only=${onlineOnly ? '1' : '0'}&_=${Date.now()}`
@@ -1525,14 +1615,63 @@
                 updateDriveHeatmapViewport();
             } catch (error) {
                 console.error('Error rendering drive heatmap:', error);
-                document.getElementById('driveHeatmapCount').textContent = `Failed to load daily roadway pass heatmap: ${error.message}`;
+                document.getElementById('driveHeatmapCount').textContent = `Failed to load daily roadway probings heatmap: ${error.message}`;
             }
         }
 
         // Open the specified tab
+        function getRequestedHashName() {
+            return window.location.hash.replace(/^#/, '');
+        }
+
         function getRequestedTabName() {
-            const hashTabName = window.location.hash.replace(/^#/, '');
-            return TAB_NAMES.has(hashTabName) ? hashTabName : 'sysMap';
+            const requestedHash = getRequestedHashName();
+            if (TAB_NAMES.has(requestedHash)) {
+                return requestedHash;
+            }
+
+            if (CAMERA_MAP_SECTION_IDS.has(requestedHash)) {
+                return 'cameraMap';
+            }
+
+            return 'cameraMap';
+        }
+
+        function getRequestedCameraSectionId() {
+            return CAMERA_MAP_SECTION_IDS.get(getRequestedHashName()) || null;
+        }
+
+        function scrollToRequestedCameraSection() {
+            const requestedSectionId = getRequestedCameraSectionId();
+            if (!requestedSectionId) {
+                return false;
+            }
+
+            const requestedSection = document.getElementById(requestedSectionId);
+            if (requestedSection) {
+                const targetTop = Math.max(requestedSection.offsetTop - CAMERA_MAP_SECTION_SCROLL_OFFSET, 0);
+                window.scrollTo({ top: targetTop, behavior: 'auto' });
+                return true;
+            }
+
+            return false;
+        }
+
+        function scheduleRequestedCameraSectionScroll() {
+            if (!getRequestedCameraSectionId()) {
+                return;
+            }
+
+            const rerunScroll = () => {
+                window.requestAnimationFrame(() => {
+                    scrollToRequestedCameraSection();
+                });
+            };
+
+            rerunScroll();
+            setTimeout(rerunScroll, 150);
+            setTimeout(rerunScroll, 500);
+            setTimeout(rerunScroll, 1000);
         }
 
         function getTabLink(tabName) {
@@ -1564,6 +1703,11 @@
                 // socket.off('marker_update');
                 
                 await mapValidate();
+            } else if (tabName === 'cameraMap') {
+                await renderCameraMap();
+                await renderDriveMap();
+                await renderDriveHeatmap();
+                scheduleRequestedCameraSectionScroll();
             } else if (tabName === 'bsm') {
                 // socket.off('rsu_state');
 
@@ -1593,7 +1737,8 @@
 <body>
     <div>
         <a class="tab-links" data-tab="scene" href="#scene" onclick="event.preventDefault(); openTab(event, 'scene');">Test Scene</a>
-        <a class="tab-links active" data-tab="sysMap" href="#sysMap" onclick="event.preventDefault(); openTab(event, 'sysMap');">System Dashboard</a>
+        <a class="tab-links" data-tab="sysMap" href="#sysMap" onclick="event.preventDefault(); openTab(event, 'sysMap');">System Dashboard</a>
+        <a class="tab-links active" data-tab="cameraMap" href="#cameraMap" onclick="event.preventDefault(); openTab(event, 'cameraMap');">Camera Map</a>
         <a class="tab-links" data-tab="support" href="#support" onclick="event.preventDefault(); openTab(event, 'support');">Support</a>
         <div style="position: absolute; top: 10px; right: 10px; background-color: #f1f1f1; padding: 10px; border: 1px solid #ccc;" id="dateTimeBox">
             Loading date and time...
@@ -1690,6 +1835,91 @@
                         <p>Multi-Access Edge Computing states information will be displayed here.</p>
                     </div>
             </div>
+        </div>
+    </div>
+    <div id="cameraMap" class="tab active">
+        <div style="padding: 16px;">
+            <section id="camera" class="map-division">
+                <h2 class="map-division-heading">Street Camera Coverage</h2>
+                <div id="cameraCount" class="state-box" style="margin-bottom: 16px; color: #0f172a; background-color: #f8fafc;">
+                    Loading camera locations...
+                </div>
+                <div id="cameraMapContent" style="height: 720px; width: 100%; border: 2px solid #165391;"></div>
+            </section>
+            <div class="map-section-divider"></div>
+            <section id="drive" class="map-division">
+                <h2 class="map-division-heading">Probe Vehicles Trajectories</h2>
+                <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px;">
+                    <div class="control-stack" style="flex: 1; min-width: 0;">
+                        <label for="driveStartSlider" class="control-title">Start Time</label>
+                        <div class="slider-stack" style="width: 100%;">
+                            <input id="driveStartSlider" type="range" min="0" max="0" step="60000" value="0" oninput="scheduleDriveWindowReload()" style="width: 100%; cursor: pointer; accent-color: #165391;">
+                            <div id="driveStartTicks" class="slider-ticks"></div>
+                        </div>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveWindowSelect" class="control-title">Select Duration</label>
+                        <select id="driveWindowSelect" onchange="handleDriveWindowSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 160px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="30">30 minutes</option>
+                            <option value="60">1 hour</option>
+                            <option value="180">3 hours</option>
+                            <option value="360">6 hours</option>
+                            <option value="720">12 hours</option>
+                            <option value="1440">24 hours</option>
+                        </select>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveAutoAdjustToggle" class="control-title">Auto View Adjust</label>
+                        <label class="switch-control" for="driveAutoAdjustToggle">
+                            <input id="driveAutoAdjustToggle" type="checkbox" checked>
+                            <span class="switch-track"></span>
+                            <span class="switch-copy"></span>
+                        </label>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
+                    <div id="driveCount" class="state-box" style="margin-top: 0; margin-bottom: 0; flex: 1; color: #0f172a; background-color: #f8fafc;">
+                        Loading vehicle trajectories...
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveConnectionSelect" class="control-title">Connection</label>
+                        <select id="driveConnectionSelect" onchange="handleDriveConnectionSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 190px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="online">Online Only</option>
+                            <option value="online_offline" selected>All</option>
+                        </select>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveVehicleSelect" class="control-title">Vehicle ID</label>
+                        <select id="driveVehicleSelect" onchange="handleDriveVehicleSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 360px; max-width: 420px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="">Loading vehicle IDs...</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="driveMapContent" style="height: 1120px; width: 100%; border: 2px solid #165391;"></div>
+            </section>
+            <div class="map-section-divider"></div>
+            <section id="heatmap" class="map-division">
+                <h2 class="map-division-heading">Daily Probing Heatmap</h2>
+                <div style="display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
+                    <div class="control-stack" style="flex: 0 0 50%; max-width: 50%;">
+                        <label for="driveHeatmapDateTicks" class="control-title">Heatmap Date</label>
+                        <div id="driveHeatmapDateTicks" class="heatmap-date-bar" role="group" aria-label="Heatmap Date Selection"></div>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveHeatmapConnectionSelect" class="control-title">Connection</label>
+                        <select id="driveHeatmapConnectionSelect" onchange="handleDriveHeatmapConnectionSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 160px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="online">Online Only</option>
+                            <option value="all" selected>All</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
+                    <div id="driveHeatmapCount" class="state-box" style="margin-top: 0; margin-bottom: 0; flex: 1; color: #0f172a; background-color: #f8fafc;">
+                        Loading daily roadway probings heatmap...
+                    </div>
+                </div>
+                <div id="driveHeatmapContent" style="height: 1120px; width: 100%; border: 2px solid #165391;"></div>
+            </section>
         </div>
     </div>
     <div id="support" class="tab">
