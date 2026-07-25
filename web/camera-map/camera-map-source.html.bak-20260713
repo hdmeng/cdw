@@ -1,0 +1,1929 @@
+<!-- Generate Intersection Dynamic Map -->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Probe Camera Maps</title>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <style>
+        .tab {
+            display: none;
+        }
+        .tab.active {
+            display: block;
+        }
+        .tab-links {
+            cursor: pointer;
+            padding: 10px;
+            background-color: #f1f1f1;
+            display: inline-block;
+        }
+        .tab-links.active {
+            background-color: #ccc;
+        }
+        /* #bsm {
+            height: 640px;
+            width: 640px;
+        } */
+        #sidebar {
+            width: 200px;
+            height: 90%;
+            position: absolute;
+            left: 0;
+            color: white;
+            background-color: #165391;
+            overflow-y: auto;
+            padding: 10px;
+        }
+        #sysMapContent {
+            margin-left: 220px; /* Adjust this value based on the width of your sidebar */
+        } 
+        .state-box {
+            margin-top: 10px; 
+            padding: 10px; 
+            background-color: #f1f1f1;
+            border: 2px solid #165391;
+        }
+        .signal-indicator {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: 2px solid #333;
+            vertical-align: middle;
+            /* The background-color will be set dynamically */
+        }
+        gmp-map-3d {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        .slider-stack {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .slider-ticks {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            font-size: 11px;
+            color: #475569;
+            margin-top: 4px;
+            gap: 8px;
+        }
+        .slider-tick {
+            border: 0;
+            padding: 6px 10px;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            line-height: 1.2;
+            cursor: pointer;
+            white-space: nowrap;
+            border-radius: 8px;
+        }
+        .slider-tick.is-selected {
+            font-weight: 700;
+            color: #0f172a;
+            background: #dbeafe;
+        }
+        .heatmap-date-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .heatmap-date-bar .slider-tick {
+            font-size: 15px;
+            border: 1px solid #cbd5e1;
+            background: #f8fafc;
+        }
+        .heatmap-date-bar .slider-tick.is-selected {
+            border-color: #165391;
+            color: #165391;
+            background: #dbeafe;
+        }
+        .map-division {
+            scroll-margin-top: 20px;
+        }
+        .map-division + .map-division {
+            margin-top: 24px;
+        }
+        .map-division-heading {
+            margin: 0 0 8px;
+            color: #165391;
+            font-size: 20px;
+        }
+        .map-section-divider {
+            height: 0;
+            border-top: 3px solid #165391;
+            border-bottom: 1px solid #cbd5e1;
+            margin: 24px 0 18px;
+        }
+        .control-stack {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 6px;
+        }
+        .control-title {
+            font-weight: 600;
+            color: #165391;
+            white-space: nowrap;
+        }
+        .switch-control {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            min-width: 176px;
+            padding: 8px 12px;
+            border: 2px solid #165391;
+            border-radius: 999px;
+            background: #dbeafe;
+            cursor: pointer;
+            user-select: none;
+            transition: background-color 0.2s ease, border-color 0.2s ease;
+        }
+        .switch-control input {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .switch-track {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            border-radius: 999px;
+            background: #165391;
+            transition: background-color 0.2s ease;
+        }
+        .switch-track::after {
+            content: '';
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ffffff;
+            transition: transform 0.2s ease;
+        }
+        .switch-copy {
+            margin-left: 10px;
+            font-weight: 600;
+            color: #0f172a;
+            letter-spacing: 0.02em;
+        }
+        .switch-control input:not(:checked) + .switch-track {
+            background: #64748b;
+        }
+        .switch-control input:checked + .switch-track::after {
+            transform: translateX(20px);
+        }
+        .switch-control input:not(:checked) ~ .switch-copy::after {
+            content: 'OFF';
+        }
+        .switch-control input:checked ~ .switch-copy::after {
+            content: 'ON';
+        }
+        .heatmap-legend {
+            margin: 14px;
+            padding: 10px 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.96);
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.16);
+            color: #0f172a;
+            font: 12px/1.4 sans-serif;
+        }
+        .heatmap-legend-title {
+            margin-bottom: 8px;
+            font-weight: 700;
+        }
+        .heatmap-legend-row {
+            display: flex;
+            align-items: stretch;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        .heatmap-legend-scale {
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .heatmap-legend-swatch {
+            width: 16px;
+            height: 18px;
+            flex: 0 0 auto;
+        }
+        .heatmap-legend-labels {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 2px;
+        }
+        .heatmap-legend-label {
+            min-height: 18px;
+            display: flex;
+            align-items: center;
+        }
+    </style>
+    <script>
+        const SERVER_URL = 'http://128.32.129.118'; 
+        const SERVER_PORT = 5000;
+        
+		// const SOCKET_PORT = 5000;
+        // Connect to the WebSocket server
+        // const socket = io(`${SERVER_URL}:${SOCKET_PORT}`, { 
+        //    secure: false
+        // });
+
+        let mapsScript;
+        let mapsScriptPromise;
+        let mapsScriptLoaded = false;
+        let map3dElement;
+        let map;
+        let cameraMap;
+        let cameraDataPromise;
+        let cameraMarkers = [];
+        let driveMap;
+        let driveDataPromise;
+        let drivePolylines = [];
+        let driveBounds;
+        let driveInfoWindow;
+        let driveInfoImageRequestKey = null;
+        let driveInfoImageCarouselState = new Map();
+        let driveInfoImageMatchCache = new Map();
+        let driveHeatmap;
+        let driveHeatmapDataPromise;
+        let driveHeatmapMarkers = [];
+        let driveHeatmapPoints = [];
+        let driveHeatmapSummary = {};
+        let driveHeatmapVisiblePointCount = 0;
+        let driveHeatmapPointDetailCache = new Map();
+        let driveHeatmapDates = [];
+        let driveHeatmapSelectedDate = null;
+        let driveHeatmapLegend;
+        let driveGridLines = [];
+        let driveHeatmapInfoWindow;
+        let driveHeatmapInfoPoint = null;
+        let driveHeatmapHasInitialFit = false;
+        let driveHeatmapReloadTimer;
+        let driveLayerInitialized = false;
+        let driveSliderInitialized = false;
+        let driveReloadTimer;
+        let driveWindowMinutes = 30;
+        let driveMapHasInitialFit = false;
+        let cameraLayerInitialized = false;
+        let cameraInfoWindow;
+        let cameraBounds;
+        let sysMap_notloaded = true;
+        const DRIVE_HEATMAP_POINT_SCALE = 4.5;
+        const DRIVE_HEATMAP_RENDER_MIN_ZOOM = 11;
+        const DRIVE_HEATMAP_INFO_MIN_ZOOM = 11;
+        const ENABLE_DRIVE_HEATMAP = true;
+        const TAB_NAMES = new Set(['scene', 'sysMap', 'cameraMap', 'support']);
+        const CAMERA_MAP_SECTION_SCROLL_OFFSET = 16;
+        const CAMERA_MAP_SECTION_IDS = new Map([
+            ['camera', 'camera'],
+            ['camera-map', 'camera'],
+            ['drive', 'drive'],
+            ['drive-map', 'drive'],
+            ['trajectory', 'drive'],
+            ['trajectories', 'drive'],
+            ['heatmap', 'heatmap'],
+            ['drive-heatmap', 'heatmap']
+        ]);
+		const DEFAULT_IMAGE_OFFSET_SECONDS = 180;
+
+        async function importGMPLib() {
+            const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
+        }
+
+        // Load the Google Maps JavaScript API
+        async function loadGMPsAPI() {
+            if (mapsScriptLoaded || (typeof google !== 'undefined' && google.maps)) {
+                mapsScriptLoaded = true;
+                return Promise.resolve();
+            }
+
+            if (mapsScriptPromise) {
+                return mapsScriptPromise;
+            }
+
+            // Fetch the API key from the server
+            const apiKeyResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/key`);
+            const apiKeyData = await apiKeyResponse.json();
+            const apiKey = apiKeyData.api_key;
+
+
+            mapsScriptPromise = new Promise((resolve, reject) => {
+                /* // Add the gmp-map-3d element dynamically
+                map3dElement = document.createElement('gmp-map-3d');
+                map3dElement.setAttribute('mode', 'hybrid');
+                map3dElement.setAttribute('center', '37.841157, -122.551679'); // Example coordinates
+                map3dElement.setAttribute('range', '2000');
+                map3dElement.setAttribute('tilt', '75');
+                map3dElement.setAttribute('heading', '330');
+                document.head.appendChild(map3dElement);
+                */
+
+                mapsScript = document.createElement('script');
+                mapsScript.async = true;
+                // mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=alpha&libraries=maps3d&loading=async&callback=initMap`;
+                mapsScript.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=initMap`;
+                
+                // Define the callback function
+                window.initMap = () => {
+                    mapsScriptLoaded = true;
+                    mapsScriptPromise = null;
+                    resolve();
+                };
+                
+                mapsScript.onerror = (error) => {
+                    mapsScriptPromise = null;
+                    console.error('Failed to load Google Maps:', error);
+                    reject(error);
+                };
+                document.head.appendChild(mapsScript);
+
+            });
+
+            return mapsScriptPromise;
+        }
+
+        function removeGoogleMapsAPI() {
+            if (mapsScript) {
+                document.head.removeChild(mapsScript);
+                document.head.removeChild(map3dElement);
+                mapsScript = null;
+                mapsScriptPromise = null;
+                mapsScriptLoaded = false;
+            }
+        }
+
+
+        async function mapValidate() {
+            try {
+                // Wait for Google Maps to be loaded
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    console.log('Google Maps not loaded yet, retrying...');
+                    await loadGMPsAPI();
+                    // Give it a moment to fully initialize
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                
+                // Fetch map center coordinates from the API
+                const mapCenterResponse = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/map_center`);
+                const mapCenter = await mapCenterResponse.json();
+                
+                // Create the map
+                map = new google.maps.Map(document.getElementById("sysMapContent"), {
+                    zoom: 19,
+                    center: mapCenter,
+                    mapTypeId: 'satellite'
+                });
+
+                genIntxnList();
+    
+            } catch (error) {
+                console.error('Error initializing map:', error);
+            }
+        }
+
+        function clearCameraMarkers() {
+            cameraMarkers.forEach(marker => marker.setMap(null));
+            cameraMarkers = [];
+        }
+
+        function getCameraClusterStep(zoom) {
+            if (zoom <= 5) {
+                return 2;
+            }
+            if (zoom <= 7) {
+                return 1;
+            }
+            if (zoom <= 9) {
+                return 0.5;
+            }
+            if (zoom <= 11) {
+                return 0.2;
+            }
+            if (zoom <= 13) {
+                return 0.08;
+            }
+            return 0;
+        }
+
+        function buildCameraInfo(camera) {
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>${camera.name || 'Unnamed camera'}</strong><br>
+                    Camera ID: ${camera.camera_id || 'n/a'}<br>
+                    Region: ${camera.region_id || 'n/a'}<br>
+                    View: ${camera.view || 'n/a'}<br>
+                    Closest Lane: ${camera.closest_lane || 'n/a'}<br>
+                    Marker Post: ${camera.marker_post || 'n/a'}<br>
+                    Status: ${camera.out_of_service ? 'Out of service' : 'Active'}
+                </div>
+            `;
+        }
+
+        function updateCameraViewport() {
+            if (!cameraMap || !cameraLayerInitialized) {
+                return;
+            }
+
+            const bounds = cameraMap.getBounds();
+            if (!bounds || !cameraDataPromise) {
+                return;
+            }
+
+            cameraDataPromise.then(cameras => {
+                const zoom = cameraMap.getZoom() || 4;
+                const northEast = bounds.getNorthEast();
+                const southWest = bounds.getSouthWest();
+                const minLat = southWest.lat();
+                const maxLat = northEast.lat();
+                const minLng = southWest.lng();
+                const maxLng = northEast.lng();
+                const crossesDateLine = minLng > maxLng;
+
+                const visibleCameras = cameras.filter(camera => {
+                    const inLat = camera.lat >= minLat && camera.lat <= maxLat;
+                    const inLng = crossesDateLine
+                        ? camera.lng >= minLng || camera.lng <= maxLng
+                        : camera.lng >= minLng && camera.lng <= maxLng;
+                    return inLat && inLng;
+                });
+
+                clearCameraMarkers();
+
+                if (!visibleCameras.length) {
+                    document.getElementById('cameraCount').textContent = `0 Street Cameras in current view of ${cameras.length} total`;
+                    return;
+                }
+
+                const clusterStep = getCameraClusterStep(zoom);
+                const useClusters = clusterStep > 0 && visibleCameras.length > 300;
+
+                if (useClusters) {
+                    const clusterBuckets = new Map();
+                    visibleCameras.forEach(camera => {
+                        const latKey = Math.round(camera.lat / clusterStep);
+                        const lngKey = Math.round(camera.lng / clusterStep);
+                        const bucketKey = `${latKey}:${lngKey}`;
+                        const bucket = clusterBuckets.get(bucketKey) || {
+                            latSum: 0,
+                            lngSum: 0,
+                            cameras: []
+                        };
+                        bucket.latSum += camera.lat;
+                        bucket.lngSum += camera.lng;
+                        bucket.cameras.push(camera);
+                        clusterBuckets.set(bucketKey, bucket);
+                    });
+
+                    clusterBuckets.forEach(bucket => {
+                        const count = bucket.cameras.length;
+                        const position = {
+                            lat: bucket.latSum / count,
+                            lng: bucket.lngSum / count
+                        };
+                        const marker = new google.maps.Marker({
+                            position,
+                            map: cameraMap,
+                            label: {
+                                text: String(count),
+                                color: 'white',
+                                fontSize: '11px',
+                                fontWeight: 'bold'
+                            },
+                            icon: {
+                                path: google.maps.SymbolPath.CIRCLE,
+                                fillColor: '#b45309',
+                                fillOpacity: 0.88,
+                                scale: Math.max(10, Math.min(24, 8 + Math.log2(count) * 3)),
+                                strokeColor: '#ffffff',
+                                strokeWeight: 1.5
+                            }
+                        });
+
+                        marker.addListener('click', () => {
+                            cameraMap.panTo(position);
+                            cameraMap.setZoom(Math.min((cameraMap.getZoom() || 4) + 2, 18));
+                        });
+
+                        cameraMarkers.push(marker);
+                    });
+
+                    document.getElementById('cameraCount').textContent = `${visibleCameras.length} Street Cameras in the current view, grouped into ${clusterBuckets.size} clusters from ${cameras.length} total`;
+                    return;
+                }
+
+                visibleCameras.forEach(camera => {
+                    const marker = new google.maps.Marker({
+                        position: { lat: camera.lat, lng: camera.lng },
+                        map: cameraMap,
+                        title: camera.name,
+                        icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            fillColor: camera.out_of_service ? '#9ca3af' : '#165391',
+                            fillOpacity: 0.95,
+                            scale: 4,
+                            strokeColor: '#ffffff',
+                            strokeWeight: 1
+                        }
+                    });
+
+                    marker.addListener('click', () => {
+                        cameraInfoWindow.setContent(buildCameraInfo(camera));
+                        cameraInfoWindow.open(cameraMap, marker);
+                    });
+
+                    cameraMarkers.push(marker);
+                });
+
+                document.getElementById('cameraCount').textContent = `${visibleCameras.length} Street Cameras in current view of ${cameras.length} total`;
+            }).catch(error => {
+                console.error('Error updating camera viewport:', error);
+                document.getElementById('cameraCount').textContent = `Failed to render camera locations: ${error.message}`;
+            });
+        }
+
+        async function renderCameraMap() {
+            try {
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    await loadGMPsAPI();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                const cameraCount = document.getElementById('cameraCount');
+                const mapContainer = document.getElementById('cameraMapContent');
+                cameraCount.textContent = 'Loading camera locations...';
+
+                if (!cameraMap) {
+                    cameraMap = new google.maps.Map(mapContainer, {
+                        zoom: 5,
+                        center: { lat: 37.915572, lng: -122.334873 },
+                        mapTypeId: 'roadmap'
+                    });
+                }
+
+                if (!cameraDataPromise) {
+                    cameraDataPromise = fetch(`${SERVER_URL}:${SERVER_PORT}/api/viz_cameras`)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Camera API returned ${response.status}`);
+                            }
+                            return response.json();
+                        });
+                }
+
+                const cameras = await cameraDataPromise;
+
+                if (!cameraLayerInitialized) {
+                    cameraBounds = new google.maps.LatLngBounds();
+                    cameras.forEach(camera => cameraBounds.extend({ lat: camera.lat, lng: camera.lng }));
+                    cameraInfoWindow = new google.maps.InfoWindow();
+                    cameraMap.addListener('idle', updateCameraViewport);
+
+                    if (cameras.length > 0) {
+                        cameraMap.fitBounds(cameraBounds, 40);
+                    }
+
+                    cameraLayerInitialized = true;
+                }
+
+                updateCameraViewport();
+            } catch (error) {
+                console.error('Error rendering camera map:', error);
+                document.getElementById('cameraCount').textContent = `Failed to load camera locations: ${error.message}`;
+            }
+        }
+
+        function clearDrivePolylines() {
+            drivePolylines.forEach(polyline => polyline.setMap(null));
+            drivePolylines = [];
+        }
+
+        function clearDriveHeatmapMarkers() {
+            driveHeatmapMarkers.forEach(marker => marker.setMap(null));
+            driveHeatmapMarkers = [];
+            driveHeatmapVisiblePointCount = 0;
+        }
+
+        function getSelectedHeatmapConnectionMode() {
+            const connectionSelect = document.getElementById('driveHeatmapConnectionSelect');
+            return connectionSelect ? connectionSelect.value : 'all';
+        }
+
+        function getDriveHeatmapVisiblePoints() {
+            if (!driveHeatmap || !driveHeatmapPoints.length) {
+                return [];
+            }
+
+            const zoom = driveHeatmap.getZoom() || 0;
+            if (zoom < DRIVE_HEATMAP_RENDER_MIN_ZOOM) {
+                return [];
+            }
+
+            const bounds = driveHeatmap.getBounds();
+            if (!bounds) {
+                return [];
+            }
+
+            const northEast = bounds.getNorthEast();
+            const southWest = bounds.getSouthWest();
+            const minLat = southWest.lat();
+            const maxLat = northEast.lat();
+            const minLng = southWest.lng();
+            const maxLng = northEast.lng();
+            const crossesDateLine = minLng > maxLng;
+
+            return driveHeatmapPoints.filter(point => {
+                if (driveHeatmapSummary.online_only && (point.count || 0) <= 0) {
+                    return false;
+                }
+
+                const inLat = point.lat >= minLat && point.lat <= maxLat;
+                const inLng = crossesDateLine
+                    ? point.lng >= minLng || point.lng <= maxLng
+                    : point.lng >= minLng && point.lng <= maxLng;
+                return inLat && inLng;
+            });
+        }
+
+        function updateDriveHeatmapCountLabel() {
+            const heatmapCount = document.getElementById('driveHeatmapCount');
+            if (!heatmapCount) {
+                return;
+            }
+
+            const summary = driveHeatmapSummary || {};
+            const totalPassCount = summary.total_pass_count ?? driveHeatmapPoints.reduce((sum, point) => sum + (point.count || 0), 0);
+            const connectionLabel = summary.online_only ? 'online only' : 'all data';
+            const zoom = driveHeatmap ? (driveHeatmap.getZoom() || 0) : 0;
+            const renderStatus = zoom < DRIVE_HEATMAP_RENDER_MIN_ZOOM
+                ? `zoom in to ${DRIVE_HEATMAP_RENDER_MIN_ZOOM}+ to render points`
+                : `${driveHeatmapVisiblePointCount} visible points rendered`;
+
+            // heatmapCount.textContent = `Daily roadway pass heatmap for ${summary.selected_date || 'n/a'}: ${summary.grid_point_count ?? driveHeatmapPoints.length} grid points, ${summary.active_point_count ?? driveHeatmapPoints.length} active, ${renderStatus}, ${connectionLabel}, total pass hits ${totalPassCount}, max probe count ${summary.max_count ?? 0}`;
+        	heatmapCount.textContent = `Daily roadway probings heatmap for ${summary.selected_date || 'n/a'}: ${summary.grid_point_count ?? driveHeatmapPoints.length} grid points; ${connectionLabel}; Total pass hits ${totalPassCount}, max probe count ${summary.max_count ?? 0}`;
+        }
+
+        function updateDriveHeatmapViewport() {
+            if (!driveHeatmap) {
+                return;
+            }
+
+            clearDriveHeatmapMarkers();
+            const visiblePoints = getDriveHeatmapVisiblePoints();
+            driveHeatmapVisiblePointCount = visiblePoints.length;
+
+            visiblePoints.forEach(point => {
+                const pinColor = getHeatmapColor(point.count || 0);
+                const pinSvg = encodeURIComponent(`
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="28" viewBox="0 0 18 28">
+                        <path d="M9 1C4.58 1 1 4.58 1 9c0 6.17 8 17 8 17s8-10.83 8-17c0-4.42-3.58-8-8-8z" fill="${pinColor}" stroke="#ffffff" stroke-width="1.5"/>
+                        <circle cx="9" cy="9" r="2.4" fill="#ffffff" fill-opacity="0.9"/>
+                    </svg>
+                `);
+				const zooml = driveHeatmap.getZoom() || 0;
+                const marker = new google.maps.Marker({
+                    position: { lat: point.lat, lng: point.lng },
+                    map: driveHeatmap,
+                    icon: {
+                        url: `data:image/svg+xml;charset=UTF-8,${pinSvg}`,
+                        scaledSize: new google.maps.Size((zooml*3-11*3+4)/2, zooml*3-11*3+6),
+                        anchor: new google.maps.Point(zooml*3-11*3+4, zooml*3-11*3+6),
+                    },
+                });
+
+                marker.addListener('click', () => {
+                    openDriveHeatmapPointInfo(point, marker.getPosition());
+                });
+
+                driveHeatmapMarkers.push(marker);
+            });
+
+            syncDriveHeatmapInfoWindowVisibility();
+            updateDriveHeatmapCountLabel();
+        }
+
+        function isDriveHeatmapPointInView(point) {
+            if (!driveHeatmap || !point) {
+                return false;
+            }
+
+            const zoom = driveHeatmap.getZoom() || 0;
+            if (zoom < DRIVE_HEATMAP_INFO_MIN_ZOOM) {
+                return false;
+            }
+
+            const bounds = driveHeatmap.getBounds();
+            if (!bounds) {
+                return false;
+            }
+
+            const northEast = bounds.getNorthEast();
+            const southWest = bounds.getSouthWest();
+            const minLat = southWest.lat();
+            const maxLat = northEast.lat();
+            const minLng = southWest.lng();
+            const maxLng = northEast.lng();
+            const crossesDateLine = minLng > maxLng;
+            const inLat = point.lat >= minLat && point.lat <= maxLat;
+            const inLng = crossesDateLine
+                ? point.lng >= minLng || point.lng <= maxLng
+                : point.lng >= minLng && point.lng <= maxLng;
+            return inLat && inLng;
+        }
+
+        function syncDriveHeatmapInfoWindowVisibility() {
+            if (!driveHeatmapInfoWindow || !driveHeatmapInfoPoint) {
+                return;
+            }
+
+            if (!isDriveHeatmapPointInView(driveHeatmapInfoPoint)) {
+                driveHeatmapInfoWindow.close();
+                driveHeatmapInfoPoint = null;
+            }
+        }
+
+        function stopDriveInfoImagePlayback(carouselId) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || !carouselState.intervalId) {
+                return;
+            }
+
+            clearInterval(carouselState.intervalId);
+            carouselState.intervalId = null;
+        }
+
+        function resetDriveInfoImageCarousels() {
+            driveInfoImageCarouselState.forEach((_, carouselId) => {
+                stopDriveInfoImagePlayback(carouselId);
+            });
+            driveInfoImageCarouselState.clear();
+        }
+
+        function resolveDriveInfoImageUrl(imageUrl) {
+            if (!imageUrl) {
+                return '';
+            }
+
+            if (/^https?:\/\//i.test(imageUrl)) {
+                return imageUrl;
+            }
+
+            if (imageUrl.startsWith('/')) {
+                return `${SERVER_URL}:${SERVER_PORT}${imageUrl}`;
+            }
+
+            return `${SERVER_URL}:${SERVER_PORT}/${imageUrl}`;
+        }
+
+        function updateDriveInfoImageCarousel(carouselId) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || !carouselState.images.length) {
+                return;
+            }
+
+            const imageFrame = document.getElementById(`${carouselId}-image`);
+            const imageMeta = document.getElementById(`${carouselId}-meta`);
+            const imageCounter = document.getElementById(`${carouselId}-counter`);
+            const playButton = document.getElementById(`${carouselId}-play`);
+            if (!imageFrame || !imageMeta || !imageCounter) {
+                return;
+            }
+
+            const selectedImage = carouselState.images[carouselState.index];
+            imageFrame.src = resolveDriveInfoImageUrl(selectedImage.url);
+            imageFrame.alt = `Vehicle ${selectedImage.vehicle_id} captured at ${selectedImage.capture_time}`;
+            imageMeta.textContent = `Captured ${selectedImage.capture_time} (${selectedImage.delta_seconds.toFixed(1)}s from probe time)`;
+            imageCounter.textContent = `${carouselState.index + 1} / ${carouselState.images.length}`;
+            if (playButton) {
+                playButton.textContent = carouselState.intervalId ? 'Pause' : 'Play';
+            }
+        }
+
+        function stepDriveInfoImageCarousel(carouselId, delta) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || !carouselState.images.length) {
+                return;
+            }
+
+            const imageCount = carouselState.images.length;
+            carouselState.index = (carouselState.index + delta + imageCount) % imageCount;
+            updateDriveInfoImageCarousel(carouselId);
+        }
+
+        function toggleDriveInfoImagePlayback(carouselId) {
+            const carouselState = driveInfoImageCarouselState.get(carouselId);
+            if (!carouselState || carouselState.images.length <= 1) {
+                return;
+            }
+
+            if (carouselState.intervalId) {
+                stopDriveInfoImagePlayback(carouselId);
+                updateDriveInfoImageCarousel(carouselId);
+                return;
+            }
+
+            carouselState.intervalId = setInterval(() => {
+                stepDriveInfoImageCarousel(carouselId, 1);
+            }, 1000);
+            updateDriveInfoImageCarousel(carouselId);
+        }
+
+        function buildDriveInfoImageSection(imagePayload, carouselId) {
+            if (!imagePayload) {
+                return '<div style="margin-top: 8px; color: #475569;">Loading matched images...</div>';
+            }
+
+            const images = Array.isArray(imagePayload.images) ? imagePayload.images : [];
+            if (images.length === 0) {
+                return '<div style="margin-top: 8px; color: #475569;">No matching images found.</div>';
+            }
+
+            const firstImage = images[0];
+            const controlsDisabled = images.length <= 1 ? 'disabled' : '';
+            return `
+                <div style="margin-top: 10px; min-width: 240px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px;">
+                        <strong>Matched Images</strong>
+                        <span id="${carouselId}-counter">1 / ${images.length}</span>
+                    </div>
+                    <div style="border: 1px solid #cbd5e1; border-radius: 10px; overflow: hidden; background: #f8fafc;">
+                        <img id="${carouselId}-image" src="${resolveDriveInfoImageUrl(firstImage.url)}" alt="Vehicle ${firstImage.vehicle_id} captured at ${firstImage.capture_time}" style="display: block; width: 100%; max-width: 320px; height: auto; background: #e2e8f0;">
+                    </div>
+                    <div id="${carouselId}-meta" style="margin-top: 6px; color: #475569;">Captured ${firstImage.capture_time} (${firstImage.delta_seconds.toFixed(1)}s from probe time)</div>
+                    <div style="display: flex; gap: 8px; margin-top: 8px;">
+                        <button type="button" onclick="stepDriveInfoImageCarousel('${carouselId}', -1)" ${controlsDisabled}>Prev</button>
+                        <button id="${carouselId}-play" type="button" onclick="toggleDriveInfoImagePlayback('${carouselId}')" ${controlsDisabled}>Play</button>
+                        <button type="button" onclick="stepDriveInfoImageCarousel('${carouselId}', 1)" ${controlsDisabled}>Next</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function buildDriveInfo(traj, imagePayload = null, carouselId = null) {
+            const imageSectionHtml = carouselId ? buildDriveInfoImageSection(imagePayload, carouselId) : '';
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>Vehicle ${traj.vehicle_id || 'n/a'}</strong><br>
+                    Speed: ${traj.speed ?? 'n/a'}<br>
+                    Heading: ${traj.heading ?? 'n/a'}<br>
+                    Seconds: ${traj.seconds ?? 'n/a'}<br>
+                    Time: ${traj.time || 'n/a'}<br>
+                    Online: ${traj.online ? 'Yes' : 'No'}
+                    ${imageSectionHtml}
+                </div>
+            `;
+        }
+
+        async function openDriveInfo(traj, position) {
+            if (!driveInfoWindow) {
+                driveInfoWindow = new google.maps.InfoWindow();
+                driveInfoWindow.addListener('closeclick', () => {
+                    driveInfoImageRequestKey = null;
+                    resetDriveInfoImageCarousels();
+                });
+            }
+
+            resetDriveInfoImageCarousels();
+            const maxImageOffsetSeconds = Number.isFinite(Number(traj.seconds)) ? Math.max(DEFAULT_IMAGE_OFFSET_SECONDS, Number(traj.seconds)) : DEFAULT_IMAGE_OFFSET_SECONDS;
+            const cacheKey = `${traj.vehicle_id || 'none'}|${traj.time || 'none'}|${maxImageOffsetSeconds}`;
+            const carouselId = `drive-info-carousel-${String(traj.vehicle_id || 'none').replace(/[^a-zA-Z0-9_-]/g, '')}-${Date.now()}`;
+            driveInfoImageRequestKey = cacheKey;
+            driveInfoWindow.setContent(buildDriveInfo(traj, null, carouselId));
+            driveInfoWindow.setPosition(position);
+            driveInfoWindow.open(driveMap);
+
+            if (!traj.vehicle_id || !traj.time) {
+                driveInfoWindow.setContent(buildDriveInfo(traj, { images: [] }, carouselId));
+                return;
+            }
+
+            if (!driveInfoImageMatchCache.has(cacheKey)) {
+                const imageUrl = `${SERVER_URL}:${SERVER_PORT}/api/viz_drive_images?vehicle_id=${encodeURIComponent(traj.vehicle_id)}&time_text=${encodeURIComponent(traj.time)}&max_offset_seconds=${encodeURIComponent(maxImageOffsetSeconds)}`;
+                driveInfoImageMatchCache.set(cacheKey, fetch(imageUrl).then(response => {
+                    if (!response.ok) {
+                        throw new Error(`Drive image API returned ${response.status}`);
+                    }
+                    return response.json();
+                }));
+            }
+
+            try {
+                const imagePayload = await driveInfoImageMatchCache.get(cacheKey);
+                if (driveInfoImageRequestKey !== cacheKey) {
+                    return;
+                }
+
+                driveInfoWindow.setContent(buildDriveInfo(traj, imagePayload, carouselId));
+                driveInfoWindow.setPosition(position);
+                driveInfoWindow.open(driveMap);
+
+                const images = Array.isArray(imagePayload.images) ? imagePayload.images : [];
+                if (images.length > 0) {
+                    driveInfoImageCarouselState.set(carouselId, {
+                        images,
+                        index: 0,
+                        intervalId: null,
+                    });
+                    updateDriveInfoImageCarousel(carouselId);
+                }
+            } catch (error) {
+                if (driveInfoImageRequestKey !== cacheKey) {
+                    return;
+                }
+
+                driveInfoWindow.setContent(`${buildDriveInfo(traj)}<div style="margin-top: 8px; color: #b91c1c;">${error.message}</div>`);
+                driveInfoWindow.setPosition(position);
+                driveInfoWindow.open(driveMap);
+            }
+        }
+
+        function getTrajectoryColor(vehicleId) {
+            const idText = String(vehicleId || 'unknown');
+            let hash = 0;
+
+            for (let index = 0; index < idText.length; index += 1) {
+                hash = ((hash << 5) - hash) + idText.charCodeAt(index);
+                hash |= 0;
+            }
+
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue}, 75%, 42%)`;
+        }
+
+        function getHeatmapCountLevel(count) {
+            const cappedCount = Math.min(Math.max(Number(count) || 0, 0), 12);
+            if (cappedCount <= 3) {
+                return 0;
+            }
+            if (cappedCount <= 6) {
+                return 1;
+            }
+            if (cappedCount <= 9) {
+                return 2;
+            }
+            if (cappedCount <= 11) {
+                return 3;
+            }
+            return 4;
+        }
+
+        function getHeatmapColor(count) {
+            if (count <= 0) {
+                return '#cbd5e1';
+            }
+            const palette = ['#93c5fd', '#60a5fa', '#34d399', '#f59e0b', '#dc2626'];
+            return palette[getHeatmapCountLevel(count)];
+        }
+
+        function getHeatmapMarkerScale(count) {
+            return DRIVE_HEATMAP_POINT_SCALE;
+        }
+
+        function ensureDriveHeatmapLegend() {
+            if (!driveHeatmap || driveHeatmapLegend) {
+                return;
+            }
+
+            const legend = document.createElement('div');
+            legend.className = 'heatmap-legend';
+            legend.innerHTML = `
+                <div class="heatmap-legend-title">Probes Count</div>
+                <div class="heatmap-legend-row">
+                    <div class="heatmap-legend-scale" aria-hidden="true">
+                        <span class="heatmap-legend-swatch" style="background:#cbd5e1"></span>
+                        <span class="heatmap-legend-swatch" style="background:#93c5fd"></span>
+                        <span class="heatmap-legend-swatch" style="background:#60a5fa"></span>
+                        <span class="heatmap-legend-swatch" style="background:#34d399"></span>
+                        <span class="heatmap-legend-swatch" style="background:#f59e0b"></span>
+                        <span class="heatmap-legend-swatch" style="background:#dc2626"></span>
+                    </div>
+                    <div class="heatmap-legend-labels">
+                        <span class="heatmap-legend-label">0</span>
+                        <span class="heatmap-legend-label">1-3</span>
+                        <span class="heatmap-legend-label">4-6</span>
+                        <span class="heatmap-legend-label">7-9</span>
+                        <span class="heatmap-legend-label">10-11</span>
+                        <span class="heatmap-legend-label">12+</span>
+                    </div>
+                </div>
+            `;
+
+            driveHeatmap.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
+            driveHeatmapLegend = legend;
+        }
+
+        function projectHeadingPoint(lat, lng, headingDegrees, distanceMeters) {
+            const headingRadians = (Number(headingDegrees) * Math.PI) / 180;
+            const deltaNorthMeters = Math.cos(headingRadians) * distanceMeters;
+            const deltaEastMeters = Math.sin(headingRadians) * distanceMeters;
+            const deltaLat = deltaNorthMeters / 111111.0;
+            const lngScale = Math.max(Math.cos((lat * Math.PI) / 180), 0.000001);
+            const deltaLng = deltaEastMeters / (111111.0 * lngScale);
+            return {
+                lat: lat + deltaLat,
+                lng: lng + deltaLng,
+            };
+        }
+
+        function buildDriveHeatmapInfo(point, summary) {
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>Roadway Pass Count</strong><br>
+                    Passes: ${point.count}<br>
+                    <!-- Grid Direction: ${point.dir ?? 'n/a'}<br> -->
+                    Vehicles: ${point.vehicle_count ?? 'n/a'}<br>
+                    First Pass: ${point.first_time || 'n/a'}<br>
+                    Last Pass: ${point.last_time || 'n/a'}<br>
+                    Mode Filtered: ${summary.online_only ? 'online only' : 'online & offline'}<br>
+                    Radius Threshold: ${summary.radius_threshold_meters ?? 'n/a'} m<br>
+                    Source File: ${summary.source_file || 'n/a'}
+                </div>
+            `;
+        }
+
+        function buildDriveHeatmapPointDetailInfo(point, summary) {
+            const vehicleList = (point.vehicle_ids || []).length > 0
+                ? point.vehicle_ids.map(vehicleId => `<div>${vehicleId}</div>`).join('')
+                : '<div>No vehicles passed</div>';
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>Roadway Pass Count</strong><br>
+                    Passes: ${point.count}<br>
+                    Grid Direction: ${point.dir ?? 'n/a'}<br>
+                    Vehicles: ${point.vehicle_count ?? 'n/a'}<br>
+                    First Pass: ${point.first_time || 'n/a'}<br>
+                    Last Pass: ${point.last_time || 'n/a'}<br>
+                    Mode Filtered: ${summary.online_only ? 'online only' : 'all data'}<br>
+                    Source File: ${summary.source_file || 'n/a'}<br>
+                    <div style="margin-top: 8px;"><strong>Vehicles Passed</strong></div>
+                    <div style="max-height: 180px; overflow-y: auto; border: 1px solid #cbd5e1; padding: 6px; background: #f8fafc;">${vehicleList}</div>
+                </div>
+            `;
+        }
+
+        async function openDriveHeatmapPointInfo(point, position) {
+            if (!driveHeatmapInfoWindow) {
+                driveHeatmapInfoWindow = new google.maps.InfoWindow();
+            }
+
+            if (!isDriveHeatmapPointInView(point)) {
+                return;
+            }
+
+            const selectedDate = driveHeatmapSummary.selected_date || getSelectedDriveHeatmapDate();
+            const onlineOnly = getSelectedHeatmapConnectionMode() === 'online';
+            const cacheKey = `${selectedDate || 'none'}|${onlineOnly ? '1' : '0'}|${point.lat}|${point.lng}`;
+            const baseSummary = {
+                ...driveHeatmapSummary,
+                online_only: onlineOnly,
+            };
+            driveHeatmapInfoPoint = { lat: point.lat, lng: point.lng };
+
+            driveHeatmapInfoWindow.setContent(`${buildDriveHeatmapInfo(point, baseSummary)}<div style="margin-top: 8px; color: #475569;">Loading vehicle list...</div>`);
+            driveHeatmapInfoWindow.setPosition(position);
+            driveHeatmapInfoWindow.open(driveHeatmap);
+
+            if (!driveHeatmapPointDetailCache.has(cacheKey)) {
+                const detailUrl = `${SERVER_URL}:${SERVER_PORT}/api/viz_drive_heatmap_point?lat=${encodeURIComponent(point.lat)}&lng=${encodeURIComponent(point.lng)}&date_text=${encodeURIComponent(selectedDate || '')}&online_only=${onlineOnly ? '1' : '0'}`;
+                const detailPromise = fetch(detailUrl)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Drive heatmap point API returned ${response.status}`);
+                        }
+                        return response.json();
+                    });
+                driveHeatmapPointDetailCache.set(cacheKey, detailPromise);
+            }
+
+            try {
+                const detailPayload = await driveHeatmapPointDetailCache.get(cacheKey);
+                if (!driveHeatmapInfoPoint || driveHeatmapInfoPoint.lat !== point.lat || driveHeatmapInfoPoint.lng !== point.lng || !isDriveHeatmapPointInView(point)) {
+                    return;
+                }
+                driveHeatmapInfoWindow.setContent(buildDriveHeatmapPointDetailInfo(detailPayload.point || point, detailPayload.summary || baseSummary));
+                driveHeatmapInfoWindow.setPosition(position);
+                driveHeatmapInfoWindow.open(driveHeatmap);
+            } catch (error) {
+                if (!driveHeatmapInfoPoint || driveHeatmapInfoPoint.lat !== point.lat || driveHeatmapInfoPoint.lng !== point.lng || !isDriveHeatmapPointInView(point)) {
+                    return;
+                }
+                driveHeatmapInfoWindow.setContent(`${buildDriveHeatmapInfo(point, baseSummary)}<div style="margin-top: 8px; color: #b91c1c;">${error.message}</div>`);
+                driveHeatmapInfoWindow.setPosition(position);
+                driveHeatmapInfoWindow.open(driveHeatmap);
+            }
+        }
+
+        function getSelectedDriveHeatmapDate() {
+            if (!driveHeatmapDates.length) {
+                return null;
+            }
+
+            if (driveHeatmapSelectedDate && driveHeatmapDates.includes(driveHeatmapSelectedDate)) {
+                return driveHeatmapSelectedDate;
+            }
+
+            return driveHeatmapDates[0] || null;
+        }
+
+        function formatHeatmapDateButtonLabel(dateText) {
+            const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            const dateValue = new Date(`${dateText}T00:00:00Z`);
+            const weekday = weekdayNames[dateValue.getUTCDay()] || '';
+            return `${weekday} ${dateText.slice(5)}`;
+        }
+
+        function updateDriveHeatmapDateLabel() {
+            const selectedDate = getSelectedDriveHeatmapDate();
+            const tickContainer = document.getElementById('driveHeatmapDateTicks');
+            if (!tickContainer) {
+                return;
+            }
+
+            Array.from(tickContainer.children).forEach((tick, index) => {
+                const isSelected = driveHeatmapDates[index] === selectedDate;
+                tick.classList.toggle('is-selected', isSelected);
+                tick.setAttribute('aria-pressed', isSelected ? 'true' : 'false');
+            });
+        }
+
+        function updateDriveHeatmapDateTicks() {
+            const tickContainer = document.getElementById('driveHeatmapDateTicks');
+            if (!tickContainer) {
+                return;
+            }
+
+            tickContainer.innerHTML = '';
+            driveHeatmapDates.forEach((dateText, index) => {
+                const tick = document.createElement('button');
+                tick.type = 'button';
+                tick.className = 'slider-tick';
+                tick.textContent = formatHeatmapDateButtonLabel(dateText);
+                tick.setAttribute('aria-label', `Heatmap Date ${dateText}`);
+                tick.onclick = () => {
+                    driveHeatmapSelectedDate = driveHeatmapDates[index] || null;
+                    handleDriveHeatmapDateSelection();
+                };
+                tickContainer.appendChild(tick);
+            });
+
+            updateDriveHeatmapDateLabel();
+        }
+
+        function updateDriveHeatmapDateSlider(summary) {
+            const availableDates = Array.isArray(summary.available_dates) ? summary.available_dates : [];
+            if (availableDates.length === 0) {
+                driveHeatmapDates = [];
+                driveHeatmapSelectedDate = null;
+                updateDriveHeatmapDateTicks();
+                updateDriveHeatmapDateLabel();
+                return;
+            }
+
+            driveHeatmapDates = availableDates.slice();
+            const currentDate = getSelectedDriveHeatmapDate();
+            const desiredDate = (currentDate && driveHeatmapDates.includes(currentDate))
+                ? currentDate
+                : (summary.selected_date || driveHeatmapDates[0]);
+            driveHeatmapSelectedDate = desiredDate;
+            updateDriveHeatmapDateTicks();
+            updateDriveHeatmapDateLabel();
+        }
+
+        function handleDriveHeatmapDateSelection() {
+            updateDriveHeatmapDateLabel();
+            if (driveHeatmapReloadTimer) {
+                clearTimeout(driveHeatmapReloadTimer);
+            }
+            driveHeatmapReloadTimer = setTimeout(() => {
+                driveHeatmapReloadTimer = null;
+                driveHeatmapDataPromise = null;
+                driveHeatmapPointDetailCache.clear();
+                clearDriveHeatmapMarkers();
+                if (driveHeatmapInfoWindow) {
+                    driveHeatmapInfoWindow.close();
+                }
+                driveHeatmapInfoPoint = null;
+                renderDriveHeatmap(true, isDriveAutoAdjustEnabled());
+            }, 250);
+        }
+
+        function handleDriveHeatmapConnectionSelect() {
+            driveHeatmapDataPromise = null;
+            driveHeatmapPointDetailCache.clear();
+            clearDriveHeatmapMarkers();
+            if (driveHeatmapInfoWindow) {
+                driveHeatmapInfoWindow.close();
+            }
+            driveHeatmapInfoPoint = null;
+            renderDriveHeatmap(true, isDriveAutoAdjustEnabled());
+        }
+
+        function isDriveAutoAdjustEnabled() {
+            const autoAdjustToggle = document.getElementById('driveAutoAdjustToggle');
+            return autoAdjustToggle ? autoAdjustToggle.checked : true;
+        }
+
+        async function reloadDriveMap(shouldAdjustView = isDriveAutoAdjustEnabled()) {
+            driveDataPromise = null;
+            driveLayerInitialized = false;
+            driveBounds = null;
+            clearDrivePolylines();
+            if (driveInfoWindow) {
+                driveInfoWindow.close();
+            }
+            await renderDriveMap(true, shouldAdjustView);
+            driveHeatmapDataPromise = null;
+            clearDriveHeatmapMarkers();
+            if (driveHeatmapInfoWindow) {
+                driveHeatmapInfoWindow.close();
+            }
+            await renderDriveHeatmap(true, shouldAdjustView);
+        }
+
+        function formatSliderTime(valueMs) {
+            return new Date(Number(valueMs)).toISOString().replace('.000Z', 'Z');
+        }
+
+        function getSelectedDriveWindowMinutes() {
+            const windowSelect = document.getElementById('driveWindowSelect');
+            return windowSelect ? Number(windowSelect.value) : driveWindowMinutes;
+        }
+
+        function updateDriveSliderLabel() {
+            const slider = document.getElementById('driveStartSlider');
+            if (!slider) {
+                return;
+            }
+
+            const startIso = formatSliderTime(slider.value);
+            const endIso = new Date(Number(slider.value) + (getSelectedDriveWindowMinutes() * 60 * 1000)).toISOString().replace('.000Z', 'Z');
+            slider.title = `Start ${startIso} | End ${endIso}`;
+            slider.setAttribute('aria-label', `Drive window from ${startIso} to ${endIso}`);
+        }
+
+        function updateDriveWindowSelect(summary) {
+            const windowSelect = document.getElementById('driveWindowSelect');
+            if (!windowSelect) {
+                return;
+            }
+
+            const currentValue = String(summary.window_minutes || driveWindowMinutes);
+            const options = summary.window_options || [30, 60, 180, 360, 720, 1440];
+            windowSelect.innerHTML = '';
+
+            options.forEach(optionMinutes => {
+                const option = document.createElement('option');
+                option.value = String(optionMinutes);
+                if (optionMinutes < 60) {
+                    option.textContent = `${optionMinutes} minutes`;
+                } else {
+                    option.textContent = `${optionMinutes / 60} hour${optionMinutes === 60 ? '' : 's'}`;
+                }
+                windowSelect.appendChild(option);
+            });
+
+            windowSelect.value = currentValue;
+            driveWindowMinutes = Number(currentValue);
+        }
+
+        function updateDriveVehicleSelect(trajectories) {
+            const vehicleSelect = document.getElementById('driveVehicleSelect');
+            if (!vehicleSelect) {
+                return;
+            }
+
+            const previousValue = vehicleSelect.value;
+            const vehicleIds = [...new Set(
+                trajectories
+                    .map(traj => traj.vehicle_id)
+                    .filter(vehicleId => vehicleId !== null && vehicleId !== undefined)
+            )].sort((left, right) => String(left).localeCompare(String(right), undefined, { numeric: true }));
+
+            vehicleSelect.innerHTML = '';
+
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = 'All vehicle IDs';
+            vehicleSelect.appendChild(defaultOption);
+
+            vehicleIds.forEach(vehicleId => {
+                const option = document.createElement('option');
+                option.value = String(vehicleId);
+                option.textContent = String(vehicleId);
+                vehicleSelect.appendChild(option);
+            });
+
+            if (previousValue && vehicleIds.some(vehicleId => String(vehicleId) === previousValue)) {
+                vehicleSelect.value = previousValue;
+            } else {
+                vehicleSelect.value = '';
+            }
+        }
+
+        function getSelectedDriveConnectionMode() {
+            const connectionSelect = document.getElementById('driveConnectionSelect');
+            return connectionSelect ? connectionSelect.value : 'online_offline';
+        }
+
+        function getFilteredDriveTrajectories(trajectories) {
+            if (getSelectedDriveConnectionMode() === 'online') {
+                return trajectories.filter(traj => traj.online);
+            }
+
+            return trajectories;
+        }
+
+        function handleDriveVehicleSelect() {
+            const vehicleSelect = document.getElementById('driveVehicleSelect');
+            const selectedVehicleId = vehicleSelect ? vehicleSelect.value : '';
+
+            // Reserved hook for future vehicle-specific actions.
+            console.debug('Selected vehicle trajectory id:', selectedVehicleId || 'all');
+        }
+
+        function handleDriveConnectionSelect() {
+            driveLayerInitialized = false;
+            driveBounds = null;
+            clearDrivePolylines();
+            if (driveInfoWindow) {
+                driveInfoWindow.close();
+            }
+            renderDriveMap(false, isDriveAutoAdjustEnabled());
+            driveHeatmapDataPromise = null;
+            driveHeatmapPointDetailCache.clear();
+            clearDriveHeatmapMarkers();
+            if (driveHeatmapInfoWindow) {
+                driveHeatmapInfoWindow.close();
+            }
+            driveHeatmapInfoPoint = null;
+            renderDriveHeatmap(true, isDriveAutoAdjustEnabled());
+        }
+
+        function formatTickLabel(valueMs) {
+            const tickDate = new Date(Number(valueMs));
+            const month = String(tickDate.getUTCMonth() + 1).padStart(2, '0');
+            const day = String(tickDate.getUTCDate()).padStart(2, '0');
+            const hour = String(tickDate.getUTCHours()).padStart(2, '0');
+            return `${month}-${day} ${hour}:00`;
+        }
+
+        function updateDriveSliderTicks(minMs, maxMs) {
+            const tickContainer = document.getElementById('driveStartTicks');
+            if (!tickContainer) {
+                return;
+            }
+
+            tickContainer.innerHTML = '';
+            const sixHoursMs = 6 * 60 * 60 * 1000;
+            const firstTick = Math.ceil(minMs / sixHoursMs) * sixHoursMs;
+
+            for (let tickMs = firstTick; tickMs <= maxMs; tickMs += sixHoursMs) {
+                const tick = document.createElement('span');
+                tick.textContent = formatTickLabel(tickMs);
+                tickContainer.appendChild(tick);
+            }
+        }
+
+        function scheduleDriveWindowReload() {
+            updateDriveSliderLabel();
+            if (driveReloadTimer) {
+                clearTimeout(driveReloadTimer);
+            }
+            driveReloadTimer = setTimeout(() => {
+                reloadDriveMap(isDriveAutoAdjustEnabled());
+            }, 250);
+        }
+
+        function handleDriveWindowSelect() {
+            driveWindowMinutes = getSelectedDriveWindowMinutes();
+            updateDriveSliderLabel();
+            reloadDriveMap(isDriveAutoAdjustEnabled());
+        }
+
+        async function renderDriveMap(forceReload = false, shouldAdjustView = true) {
+            try {
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    await loadGMPsAPI();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                const driveCount = document.getElementById('driveCount');
+                const mapContainer = document.getElementById('driveMapContent');
+                driveCount.textContent = 'Loading vehicle trajectories...';
+
+                if (!driveMap) {
+                    driveMap = new google.maps.Map(mapContainer, {
+                        zoom: 9,
+                        center: { lat: 37.75, lng: -122.2 },
+                        mapTypeId: 'roadmap'
+                    });
+                }
+
+                if (forceReload) {
+                    driveDataPromise = null;
+                }
+
+                if (!driveDataPromise) {
+                    const slider = document.getElementById('driveStartSlider');
+                    const selectedStart = slider ? formatSliderTime(slider.value) : null;
+                    const selectedWindowMinutes = getSelectedDriveWindowMinutes();
+                    const driveUrl = forceReload
+                        ? `${SERVER_URL}:${SERVER_PORT}/api/viz_drives?reload=1&start_time=${encodeURIComponent(selectedStart)}&window_minutes=${selectedWindowMinutes}&_=${Date.now()}`
+                        : `${SERVER_URL}:${SERVER_PORT}/api/viz_drives?window_minutes=${selectedWindowMinutes}`;
+                    driveDataPromise = fetch(driveUrl)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Drive API returned ${response.status}`);
+                            }
+                            return response.json();
+                        });
+                }
+
+                const drivePayload = await driveDataPromise;
+                const trajectories = drivePayload.trajectories || [];
+                const filteredTrajectories = getFilteredDriveTrajectories(trajectories);
+                const summary = drivePayload.summary || {};
+
+                updateDriveWindowSelect(summary);
+                updateDriveVehicleSelect(filteredTrajectories);
+
+                if (!driveSliderInitialized && summary.available_time_start && summary.available_time_end) {
+                    const slider = document.getElementById('driveStartSlider');
+                    const minMs = Date.parse(summary.available_time_start);
+                    const maxMs = Date.parse(summary.available_time_end) - (driveWindowMinutes * 60 * 1000);
+                    const selectedMs = Date.parse(summary.selected_time_start || summary.available_time_start);
+                    slider.min = String(minMs);
+                    slider.max = String(Math.max(minMs, maxMs));
+                    slider.step = String(30 * 60 * 1000);
+                    slider.value = String(Math.min(Math.max(selectedMs, minMs), Math.max(minMs, maxMs)));
+                    updateDriveSliderTicks(minMs, Math.max(minMs, maxMs));
+                    updateDriveSliderLabel();
+                    driveSliderInitialized = true;
+                } else if (summary.available_time_start && summary.available_time_end) {
+                    const slider = document.getElementById('driveStartSlider');
+                    const minMs = Date.parse(summary.available_time_start);
+                    const maxMs = Date.parse(summary.available_time_end) - (driveWindowMinutes * 60 * 1000);
+                    slider.min = String(minMs);
+                    slider.max = String(Math.max(minMs, maxMs));
+                    slider.value = String(Math.min(Number(slider.value), Math.max(minMs, maxMs)));
+                    updateDriveSliderTicks(minMs, Math.max(minMs, maxMs));
+                    updateDriveSliderLabel();
+                }
+
+                if (!driveInfoWindow) {
+                    driveInfoWindow = new google.maps.InfoWindow();
+                }
+
+                driveBounds = new google.maps.LatLngBounds();
+                clearDrivePolylines();
+
+                filteredTrajectories.forEach(traj => {
+                    const path = traj.points.map(point => {
+                        driveBounds.extend(point);
+                        return point;
+                    });
+
+                    const polyline = new google.maps.Polyline({
+                        path,
+                        geodesic: true,
+                        strokeColor: getTrajectoryColor(traj.vehicle_id),
+                        strokeOpacity: 0.8,
+                        strokeWeight: 3,
+                        map: driveMap
+                    });
+
+                    polyline.addListener('click', event => {
+                        openDriveInfo(traj, event.latLng);
+                    });
+
+                    drivePolylines.push(polyline);
+                });
+
+                if (filteredTrajectories.length > 0 && (!driveMapHasInitialFit || shouldAdjustView)) {
+                    driveMap.fitBounds(driveBounds, 40);
+                    driveMapHasInitialFit = true;
+                }
+
+                driveLayerInitialized = true;
+
+                const timeRange = summary.time_start && summary.time_end
+                    ? `${summary.time_start.slice(0, -4)} to ${summary.time_end.slice(0, -4)}`
+                    : 'time range unavailable';
+                const connectionLabel = getSelectedDriveConnectionMode() === 'online' ? 'online only' : 'online and offline';
+                driveCount.textContent = `Showing ${filteredTrajectories.length} vehicle trajectories for ${new Set(filteredTrajectories.map(traj => traj.vehicle_id)).size} vehicles, ${connectionLabel}, time range ${timeRange}`;
+            } catch (error) {
+                console.error('Error rendering drive map:', error);
+                document.getElementById('driveCount').textContent = `Failed to load vehicle trajectories: ${error.message}`;
+            }
+        }
+
+        async function renderDriveHeatmap(forceReload = false, shouldAdjustView = true) {
+            try {
+                if (!ENABLE_DRIVE_HEATMAP) {
+                    clearDriveHeatmapMarkers();
+                    driveHeatmapDataPromise = null;
+                    driveHeatmapPointDetailCache.clear();
+                    driveHeatmapInfoPoint = null;
+                    if (driveHeatmapInfoWindow) {
+                        driveHeatmapInfoWindow.close();
+                    }
+                    const heatmapCount = document.getElementById('driveHeatmapCount');
+                    if (heatmapCount) {
+                        heatmapCount.textContent = 'Daily roadway probings heatmap rendering is temporarily disabled.';
+                    }
+                    return;
+                }
+
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    await loadGMPsAPI();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                const heatmapCount = document.getElementById('driveHeatmapCount');
+                const mapContainer = document.getElementById('driveHeatmapContent');
+                heatmapCount.textContent = 'Loading daily roadway probings heatmap...';
+
+                if (!driveHeatmap) {
+                    driveHeatmap = new google.maps.Map(mapContainer, {
+                        zoom: 11,
+                        center: { lat: 37.75, lng: -122.2 },
+                        mapTypeId: 'satellite'
+                    });
+                    ensureDriveHeatmapLegend();
+                    driveHeatmap.addListener('idle', () => {
+                        updateDriveHeatmapViewport();
+                        syncDriveHeatmapInfoWindowVisibility();
+                    });
+                }
+
+                if (forceReload) {
+                    driveHeatmapDataPromise = null;
+                }
+
+                if (!driveHeatmapDataPromise) {
+                    const onlineOnly = getSelectedHeatmapConnectionMode() === 'online';
+                    const selectedDate = getSelectedDriveHeatmapDate();
+                    const heatmapUrl = selectedDate
+                        ? `${SERVER_URL}:${SERVER_PORT}/api/viz_drive_heatmap?date_text=${encodeURIComponent(selectedDate)}&online_only=${onlineOnly ? '1' : '0'}&_=${Date.now()}`
+                        : `${SERVER_URL}:${SERVER_PORT}/api/viz_drive_heatmap?online_only=${onlineOnly ? '1' : '0'}&_=${Date.now()}`;
+                    driveHeatmapDataPromise = fetch(heatmapUrl)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Drive heatmap API returned ${response.status}`);
+                            }
+                            return response.json();
+                        });
+                }
+
+                const heatmapPayload = await driveHeatmapDataPromise;
+                const points = heatmapPayload.points || [];
+                const summary = heatmapPayload.summary || {};
+                driveHeatmapPoints = points;
+                driveHeatmapSummary = summary;
+                const totalPassCount = points.reduce((sum, point) => sum + (point.count || 0), 0);
+                updateDriveHeatmapDateSlider(summary);
+
+                if (!driveHeatmapInfoWindow) {
+                    driveHeatmapInfoWindow = new google.maps.InfoWindow();
+                }
+
+                const heatmapBounds = new google.maps.LatLngBounds();
+                clearDriveHeatmapMarkers();
+
+                points.forEach(point => {
+                    heatmapBounds.extend(point);
+                });
+
+                // if (points.length > 0 && (!driveHeatmapHasInitialFit || shouldAdjustView)) {
+                //    driveHeatmap.fitBounds(heatmapBounds, 40);
+                //    driveHeatmapHasInitialFit = true;
+                // }
+
+                updateDriveHeatmapViewport();
+            } catch (error) {
+                console.error('Error rendering drive heatmap:', error);
+                document.getElementById('driveHeatmapCount').textContent = `Failed to load daily roadway probings heatmap: ${error.message}`;
+            }
+        }
+
+        // Open the specified tab
+        function getRequestedHashName() {
+            return window.location.hash.replace(/^#/, '');
+        }
+
+        function getRequestedTabName() {
+            const requestedHash = getRequestedHashName();
+            if (TAB_NAMES.has(requestedHash)) {
+                return requestedHash;
+            }
+
+            if (CAMERA_MAP_SECTION_IDS.has(requestedHash)) {
+                return 'cameraMap';
+            }
+
+            return 'cameraMap';
+        }
+
+        function getRequestedCameraSectionId() {
+            return CAMERA_MAP_SECTION_IDS.get(getRequestedHashName()) || null;
+        }
+
+        function scrollToRequestedCameraSection() {
+            const requestedSectionId = getRequestedCameraSectionId();
+            if (!requestedSectionId) {
+                return false;
+            }
+
+            const requestedSection = document.getElementById(requestedSectionId);
+            if (requestedSection) {
+                const targetTop = Math.max(requestedSection.offsetTop - CAMERA_MAP_SECTION_SCROLL_OFFSET, 0);
+                window.scrollTo({ top: targetTop, behavior: 'auto' });
+                return true;
+            }
+
+            return false;
+        }
+
+        function scheduleRequestedCameraSectionScroll() {
+            if (!getRequestedCameraSectionId()) {
+                return;
+            }
+
+            const rerunScroll = () => {
+                window.requestAnimationFrame(() => {
+                    scrollToRequestedCameraSection();
+                });
+            };
+
+            rerunScroll();
+            setTimeout(rerunScroll, 150);
+            setTimeout(rerunScroll, 500);
+            setTimeout(rerunScroll, 1000);
+        }
+
+        function getTabLink(tabName) {
+            return document.querySelector(`.tab-links[href="#${tabName}"]`) || document.querySelector(`.tab-links[data-tab="${tabName}"]`);
+        }
+
+        async function openTab(event, tabName, updateHash = true) {
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+
+            const tabLinks = document.querySelectorAll('.tab-links');
+            tabLinks.forEach(link => link.classList.remove('active'));
+
+            document.getElementById(tabName).classList.add('active');
+            const activeTabLink = getTabLink(tabName);
+            if (activeTabLink) {
+                activeTabLink.classList.add('active');
+            } else if (event) {
+                event.currentTarget.classList.add('active');
+            }
+
+            if (updateHash && window.location.hash !== `#${tabName}`) {
+                window.location.hash = tabName;
+            }
+
+            // Call the appropriate function based on the tab name
+            if (tabName === 'sysMap') {
+                // turn off the location update socket
+                // socket.off('marker_update');
+                
+                await mapValidate();
+            } else if (tabName === 'cameraMap') {
+                await renderCameraMap();
+                await renderDriveMap();
+                await renderDriveHeatmap();
+                scheduleRequestedCameraSectionScroll();
+            } else if (tabName === 'bsm') {
+                // socket.off('rsu_state');
+
+                await bsmTraj();
+            }  else {
+                // socket.off('marker_update');
+                // socket.off('rsu_state');
+            }
+        }
+
+        // window.onload = bsmTraj;
+        window.onload = async function() {
+            // load Google Maps JavaScript API
+            await loadGMPsAPI();
+            
+            // Give the 3D maps a moment to initialize
+            await new Promise(resolve => setTimeout(resolve, 1000));
+
+            await openTab(null, getRequestedTabName(), false);
+        }
+
+        window.addEventListener('hashchange', () => {
+            openTab(null, getRequestedTabName(), false);
+        });
+    </script>
+</head>
+<body>
+    <div>
+        <a class="tab-links" data-tab="scene" href="#scene" onclick="event.preventDefault(); openTab(event, 'scene');">Test Scene</a>
+        <a class="tab-links" data-tab="sysMap" href="#sysMap" onclick="event.preventDefault(); openTab(event, 'sysMap');">System Dashboard</a>
+        <a class="tab-links active" data-tab="cameraMap" href="#cameraMap" onclick="event.preventDefault(); openTab(event, 'cameraMap');">Camera Map</a>
+        <a class="tab-links" data-tab="support" href="#support" onclick="event.preventDefault(); openTab(event, 'support');">Support</a>
+        <div style="position: absolute; top: 10px; right: 10px; background-color: #f1f1f1; padding: 10px; border: 1px solid #ccc;" id="dateTimeBox">
+            Loading date and time...
+        </div>
+        <script>
+            async function updateDateTime() {
+                try {
+                    const response = await fetch('https://timeapi.io/api/time/current/zone?timeZone=America%2FLos_Angeles');
+                    const data = await response.json();
+                    const dateTimeBox = document.getElementById('dateTimeBox');
+                    const formattedTime = data.dateTime.replace('T', ' ').split('.')[0];
+                    dateTimeBox.textContent = `${formattedTime}`;
+                } catch (error) {
+                    console.error('Error fetching date and time:', error);
+                }
+            }
+
+            updateDateTime();
+            setInterval(updateDateTime, 60000); // Update every 60 seconds
+        </script>
+    </div>
+    <div id="scene" class="tab">
+        <div style="display: flex; flex-direction: column;">
+        <div id="sceneContent" style="height: 600px; width: 80%;">
+            <!--
+			<gmp-map-3d mode="hybrid" center="37.915410, -122.334223" range="120" tilt="80" heading="290"></gmp-map-3d> 
+			-->
+		</div>
+        <div id="sceneContent2" style="height: 600px; width: 80%;">
+        </div> 
+        </div>
+        </div>
+    </div>
+    <div id="sysMap" class="tab">
+        <div style="display: flex; flex-direction: row; height: 100%;">
+            <div style="flex: 1;">
+                <div id="sidebar"><ul id="intxnList"></ul></div>
+            </div>
+            <div style="flex: 2; display: flex; flex-direction: column;">
+                <div id="sysMapContent" style="position: absolute; left: 10px; height: 640px; width: 640px; "></div>
+                <div id="msgStatsBox" class="state-box" style="position: absolute; margin-top: 660px; width: 600px;">
+                    <h3>Message Statistics</h3>
+                    <table id="msgStatsTable" style="width:80%; border-collapse: collapse;">
+                        <thead>
+                            <tr>
+                                <th style="border: 1px solid #165391; padding: 5px;">Message Type</th>
+                                <th style="border: 1px solid #165391; padding: 5px;">Received Count</th>
+                                <th style="border: 1px solid #165391; padding: 5px;">Last Received</th>
+                                <th style="border: 1px solid #165391; padding: 5px;"></th>
+                                <th style="border: 1px solid #165391; padding: 5px;"></th>
+                            </tr>
+    
+                        </thead>
+                        <tbody>
+                            <!-- Rows will be populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+                <script>
+                    async function updateMsgStats() {
+                        try {
+                            const response = await fetch(`${SERVER_URL}:${SERVER_PORT}/api/msg_stats`);
+                            const stats = await response.json();
+                            const tbody = document.querySelector('#msgStatsTable tbody');
+                            tbody.innerHTML = '';
+                            stats.forEach(stat => {
+                                const row = document.createElement('tr');
+                                row.innerHTML = `
+                                    <td style="border: 1px solid #165391; padding: 5px;">${stat.type}</td>
+                                    <td style="border: 1px solid #165391; padding: 5px;">${stat.count}</td>
+                                    <td style="border: 1px solid #165391; padding: 5px;">${stat.last_received}</td>
+                                `;
+                                tbody.appendChild(row);
+                            });
+                        } catch (error) {
+                            console.error('Error fetching message statistics:', error);
+                        }
+                    }
+                    updateMsgStats();
+                    setInterval(updateMsgStats, 5000);
+                </script>
+            </div>    
+            <div style="flex: 1; display: flex; flex-direction: column;">
+                    <div id="rsuStatus" class="state-box">
+                        <h3>RSU State</h3>
+                        <p>RSU State information will be displayed here.</p>
+                    </div>
+                    <div id="ctrlStatus" class="state-box">
+                        <h3>Controller State</h3>
+                        <p>Controller states information will be displayed here.</p>
+                    </div>
+                    <div id="mecStatus" class="state-box">
+                        <h3>MEC State</h3>
+                        <p>Multi-Access Edge Computing states information will be displayed here.</p>
+                    </div>
+            </div>
+        </div>
+    </div>
+    <div id="cameraMap" class="tab active">
+        <div style="padding: 16px;">
+            <section id="camera" class="map-division">
+                <h2 class="map-division-heading">Street Camera Coverage</h2>
+                <div id="cameraCount" class="state-box" style="margin-bottom: 16px; color: #0f172a; background-color: #f8fafc;">
+                    Loading camera locations...
+                </div>
+                <div id="cameraMapContent" style="height: 720px; width: 100%; border: 2px solid #165391;"></div>
+            </section>
+            <div class="map-section-divider"></div>
+            <section id="drive" class="map-division">
+                <h2 class="map-division-heading">Probe Vehicles Trajectories</h2>
+                <div style="display: flex; align-items: flex-start; gap: 12px; margin-bottom: 16px;">
+                    <div class="control-stack" style="flex: 1; min-width: 0;">
+                        <label for="driveStartSlider" class="control-title">Start Time</label>
+                        <div class="slider-stack" style="width: 100%;">
+                            <input id="driveStartSlider" type="range" min="0" max="0" step="60000" value="0" oninput="scheduleDriveWindowReload()" style="width: 100%; cursor: pointer; accent-color: #165391;">
+                            <div id="driveStartTicks" class="slider-ticks"></div>
+                        </div>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveWindowSelect" class="control-title">Select Duration</label>
+                        <select id="driveWindowSelect" onchange="handleDriveWindowSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 160px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="30">30 minutes</option>
+                            <option value="60">1 hour</option>
+                            <option value="180">3 hours</option>
+                            <option value="360">6 hours</option>
+                            <option value="720">12 hours</option>
+                            <option value="1440">24 hours</option>
+                        </select>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveAutoAdjustToggle" class="control-title">Auto View Adjust</label>
+                        <label class="switch-control" for="driveAutoAdjustToggle">
+                            <input id="driveAutoAdjustToggle" type="checkbox" checked>
+                            <span class="switch-track"></span>
+                            <span class="switch-copy"></span>
+                        </label>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
+                    <div id="driveCount" class="state-box" style="margin-top: 0; margin-bottom: 0; flex: 1; color: #0f172a; background-color: #f8fafc;">
+                        Loading vehicle trajectories...
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveConnectionSelect" class="control-title">Connection</label>
+                        <select id="driveConnectionSelect" onchange="handleDriveConnectionSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 190px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="online">Online Only</option>
+                            <option value="online_offline" selected>All</option>
+                        </select>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveVehicleSelect" class="control-title">Vehicle ID</label>
+                        <select id="driveVehicleSelect" onchange="handleDriveVehicleSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 360px; max-width: 420px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="">Loading vehicle IDs...</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="driveMapContent" style="height: 1120px; width: 100%; border: 2px solid #165391;"></div>
+            </section>
+            <div class="map-section-divider"></div>
+            <section id="heatmap" class="map-division">
+                <h2 class="map-division-heading">Daily Probing Heatmap</h2>
+                <div style="display: flex; align-items: flex-start; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
+                    <div class="control-stack" style="flex: 0 0 50%; max-width: 50%;">
+                        <label for="driveHeatmapDateTicks" class="control-title">Heatmap Date</label>
+                        <div id="driveHeatmapDateTicks" class="heatmap-date-bar" role="group" aria-label="Heatmap Date Selection"></div>
+                    </div>
+                    <div class="control-stack">
+                        <label for="driveHeatmapConnectionSelect" class="control-title">Connection</label>
+                        <select id="driveHeatmapConnectionSelect" onchange="handleDriveHeatmapConnectionSelect()" class="state-box" style="margin-top: 0; margin-bottom: 0; min-width: 160px; color: #0f172a; background-color: #f8fafc; cursor: pointer;">
+                            <option value="online">Online Only</option>
+                            <option value="all" selected>All</option>
+                        </select>
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
+                    <div id="driveHeatmapCount" class="state-box" style="margin-top: 0; margin-bottom: 0; flex: 1; color: #0f172a; background-color: #f8fafc;">
+                        Loading daily roadway probings heatmap...
+                    </div>
+                </div>
+                <div id="driveHeatmapContent" style="height: 1120px; width: 100%; border: 2px solid #165391;"></div>
+            </section>
+        </div>
+    </div>
+    <div id="support" class="tab">
+        <h2>Support</h2>
+        <p>For any issues, please contact the support team: hdmeng at berkeley dot edu.</p>
+    </div>
+</body>
+</html>

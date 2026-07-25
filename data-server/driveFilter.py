@@ -32,6 +32,8 @@ DEFAULT_DAY_SPLIT_HOUR = 6
 DEFAULT_GRID_PASS_RADIUS_METERS = 8.0
 DEFAULT_GRID_FILE_NAME = 'BayArea_Grid.json'
 DEFAULT_GRID_PASS_HEADING_DELTA_DEGREES = 60.0
+DEFAULT_CORRIDOR_RADIUS_METERS = 100.0
+DEFAULT_PROGRESS_LOG_INTERVAL = 1000
 
 
 def parse_drive_time(timestamp_text):
@@ -57,7 +59,7 @@ def infer_drive_file_date(file_name):
 
 
 def get_grid_passes_file_name(date_text):
-	return f'BayArea_{date_text}_Grid_Passes.json'
+	return f'BayArea_Grid_Passes_{date_text}.json'
 
 
 def build_split_day_time_range(date_text, split_hour=DEFAULT_DAY_SPLIT_HOUR):
@@ -102,7 +104,7 @@ def load_grid_points(grid_file):
 
 	unique_grid_points = []
 	seen_coordinates = set()
-	for point in raw_grid_points:
+	for source_index, point in enumerate(raw_grid_points):
 		coordinates = point.get('coordinates', [])
 		if len(coordinates) < 2:
 			continue
@@ -115,6 +117,7 @@ def load_grid_points(grid_file):
 		grid_point = {
 			'coordinates': [coord_key[0], coord_key[1]],
 			'dir': round(float(point.get('dir', 0))),
+			'source_index': source_index,
 			'passes': [],
 		}
 		unique_grid_points.append(grid_point)
@@ -122,8 +125,123 @@ def load_grid_points(grid_file):
 	return unique_grid_points, len(raw_grid_points)
 
 
+def iter_geojson_line_segments(geojson_file):
+	with open(geojson_file, 'r', encoding='utf-8') as geojson_handle:
+		geojson_payload = json.load(geojson_handle)
+
+	for feature in geojson_payload.get('features', []):
+		geometry = feature.get('geometry') or {}
+		if geometry.get('type') != 'MultiLineString':
+			continue
+
+		for line in geometry.get('coordinates', []):
+			if len(line) < 2:
+				continue
+
+			for start_point, end_point in zip(line, line[1:]):
+				if len(start_point) < 2 or len(end_point) < 2:
+					continue
+
+				yield {
+					'start_lon': float(start_point[0]),
+					'start_lat': float(start_point[1]),
+					'end_lon': float(end_point[0]),
+					'end_lat': float(end_point[1]),
+				}
+
+
+def build_corridor_segment_index(geojson_file, radius_threshold_meters):
+	segments = list(iter_geojson_line_segments(geojson_file))
+	if not segments:
+		raise ValueError(f'No usable corridor segments found in {geojson_file}')
+
+	all_lats = []
+	for segment in segments:
+		all_lats.extend((segment['start_lat'], segment['end_lat']))
+
+	center_lat = sum(all_lats) / len(all_lats)
+	lat_cell_size = radius_threshold_meters / 111111.0
+	lon_cell_size = radius_threshold_meters / max(111111.0 * math.cos(math.radians(center_lat)), 1e-6)
+	spatial_index = {}
+
+	for segment in segments:
+		min_lon = min(segment['start_lon'], segment['end_lon'])
+		max_lon = max(segment['start_lon'], segment['end_lon'])
+		min_lat = min(segment['start_lat'], segment['end_lat'])
+		max_lat = max(segment['start_lat'], segment['end_lat'])
+		min_cell_x = int((min_lon - lon_cell_size) / lon_cell_size)
+		max_cell_x = int((max_lon + lon_cell_size) / lon_cell_size)
+		min_cell_y = int((min_lat - lat_cell_size) / lat_cell_size)
+		max_cell_y = int((max_lat + lat_cell_size) / lat_cell_size)
+
+		for cell_x in range(min_cell_x, max_cell_x + 1):
+			for cell_y in range(min_cell_y, max_cell_y + 1):
+				spatial_index.setdefault((cell_x, cell_y), []).append(segment)
+
+	return {
+		'spatial_index': spatial_index,
+		'lat_cell_size': lat_cell_size,
+		'lon_cell_size': lon_cell_size,
+	}
+
+
+def point_within_corridor(corridor_index, point_lon, point_lat, radius_threshold_meters):
+	cell_x = int(point_lon / corridor_index['lon_cell_size'])
+	cell_y = int(point_lat / corridor_index['lat_cell_size'])
+	seen_segments = set()
+
+	for neighbor_x in range(cell_x - 1, cell_x + 2):
+		for neighbor_y in range(cell_y - 1, cell_y + 2):
+			for segment in corridor_index['spatial_index'].get((neighbor_x, neighbor_y), []):
+				segment_key = (
+					segment['start_lon'],
+					segment['start_lat'],
+					segment['end_lon'],
+					segment['end_lat'],
+				)
+				if segment_key in seen_segments:
+					continue
+
+				seen_segments.add(segment_key)
+				segment_x2, segment_y2 = geoCalc.calc_lat_lon_offset(
+					segment['start_lon'],
+					segment['start_lat'],
+					segment['end_lon'],
+					segment['end_lat'],
+				)[:2]
+				target_x, target_y = geoCalc.calc_lat_lon_offset(
+					segment['start_lon'],
+					segment['start_lat'],
+					point_lon,
+					point_lat,
+				)[:2]
+				distance_meters, _ = geoCalc.distance_to_segment(
+					0.0,
+					0.0,
+					segment_x2,
+					segment_y2,
+					target_x,
+					target_y,
+				)
+				if distance_meters <= radius_threshold_meters:
+					return True
+
+	return False
+
+
+def feature_matches_corridor(feature, corridor_index, radius_threshold_meters):
+	coordinates = feature.get('geometry', {}).get('coordinates', [])
+	for point_lon, point_lat in coordinates:
+		if point_within_corridor(corridor_index, float(point_lon), float(point_lat), radius_threshold_meters):
+			return True
+	return False
+
+
 def build_grid_spatial_index(grid_points, radius_threshold_meters):
-	center_lat = (DEFAULT_FILTER_LOC_BOX['lat_min'] + DEFAULT_FILTER_LOC_BOX['lat_max']) / 2.0
+	if grid_points:
+		center_lat = sum(point['coordinates'][1] for point in grid_points) / len(grid_points)
+	else:
+		center_lat = (DEFAULT_FILTER_LOC_BOX['lat_min'] + DEFAULT_FILTER_LOC_BOX['lat_max']) / 2.0
 	lat_cell_size = radius_threshold_meters / 111111.0
 	lon_cell_size = radius_threshold_meters / max(111111.0 * math.cos(math.radians(center_lat)), 1e-6)
 	spatial_index = {}
@@ -143,42 +261,45 @@ def build_grid_spatial_index(grid_points, radius_threshold_meters):
 
 
 def iter_matching_grid_points(grid_index, start_lon, start_lat, end_lon, end_lat, radius_threshold_meters, heading_degrees=None, heading_delta_limit_degrees=DEFAULT_GRID_PASS_HEADING_DELTA_DEGREES):
-	min_lon = min(start_lon, end_lon)
-	max_lon = max(start_lon, end_lon)
-	min_lat = min(start_lat, end_lat)
-	max_lat = max(start_lat, end_lat)
-	lon_padding = grid_index['lon_cell_size']
-	lat_padding = grid_index['lat_cell_size']
-	min_cell_x = int((min_lon - lon_padding) / grid_index['lon_cell_size'])
-	max_cell_x = int((max_lon + lon_padding) / grid_index['lon_cell_size'])
-	min_cell_y = int((min_lat - lat_padding) / grid_index['lat_cell_size'])
-	max_cell_y = int((max_lat + lat_padding) / grid_index['lat_cell_size'])
 	segment_x2, segment_y2 = geoCalc.calc_lat_lon_offset(start_lon, start_lat, end_lon, end_lat)[:2]
+	segment_length_meters = math.hypot(segment_x2, segment_y2)
+	sample_count = max(1, int(math.ceil(segment_length_meters / max(radius_threshold_meters, 1.0))))
 	seen_coordinates = set()
 
-	for cell_x in range(min_cell_x, max_cell_x + 1):
-		for cell_y in range(min_cell_y, max_cell_y + 1):
-			for point in grid_index['spatial_index'].get((cell_x, cell_y), []):
-				coord_key = tuple(point['coordinates'])
-				if coord_key in seen_coordinates:
-					continue
+	for sample_index in range(sample_count + 1):
+		sample_ratio = sample_index / sample_count
+		sample_lon = start_lon + ((end_lon - start_lon) * sample_ratio)
+		sample_lat = start_lat + ((end_lat - start_lat) * sample_ratio)
+		cell_x = int(sample_lon / grid_index['lon_cell_size'])
+		cell_y = int(sample_lat / grid_index['lat_cell_size'])
 
-				point_lon, point_lat = point['coordinates']
-				target_x, target_y = geoCalc.calc_lat_lon_offset(start_lon, start_lat, point_lon, point_lat)[:2]
-				distance_meters, distance_type = geoCalc.distance_to_segment(0.0, 0.0, segment_x2, segment_y2, target_x, target_y)
-				if distance_meters > radius_threshold_meters or distance_type != 'middle':
-					continue
-
-				if heading_degrees is not None:
-					grid_heading = point.get('dir')
-					if grid_heading is None:
-						continue
-					heading_delta = get_heading_delta_degrees(heading_degrees, grid_heading)
-					if heading_delta > heading_delta_limit_degrees:
+		for neighbor_x in range(cell_x - 1, cell_x + 2):
+			for neighbor_y in range(cell_y - 1, cell_y + 2):
+				for point in grid_index['spatial_index'].get((neighbor_x, neighbor_y), []):
+					coord_key = tuple(point['coordinates'])
+					if coord_key in seen_coordinates:
 						continue
 
-				seen_coordinates.add(coord_key)
-				yield point, distance_meters
+					point_lon, point_lat = point['coordinates']
+					target_x, target_y = geoCalc.calc_lat_lon_offset(start_lon, start_lat, point_lon, point_lat)[:2]
+					distance_meters, distance_type = geoCalc.distance_to_segment(0.0, 0.0, segment_x2, segment_y2, target_x, target_y)
+					if distance_meters > radius_threshold_meters or distance_type != 'middle':
+						continue
+
+					if heading_degrees is not None:
+						grid_heading = point.get('dir')
+						if grid_heading is None:
+							continue
+						if grid_heading == -1:
+							seen_coordinates.add(coord_key)
+							yield point, distance_meters
+							continue
+						heading_delta = get_heading_delta_degrees(heading_degrees, grid_heading)
+						if heading_delta > heading_delta_limit_degrees:
+							continue
+
+					seen_coordinates.add(coord_key)
+					yield point, distance_meters
 
 
 def build_drive_grid(input_file, min_spacing_meters=20.0, heading_bin_degrees=15.0, max_points=None):
@@ -235,12 +356,15 @@ def build_drive_grid(input_file, min_spacing_meters=20.0, heading_bin_degrees=15
 	return grid_points
 
 
-def build_drive_grid_passes(input_file, grid_file, radius_threshold_meters=DEFAULT_GRID_PASS_RADIUS_METERS):
+def build_drive_grid_passes(input_file, grid_file, radius_threshold_meters=DEFAULT_GRID_PASS_RADIUS_METERS, progress_log_interval=DEFAULT_PROGRESS_LOG_INTERVAL):
 	grid_points, raw_point_count = load_grid_points(grid_file)
 	grid_index = build_grid_spatial_index(grid_points, radius_threshold_meters)
 	total_pass_count = 0
 
-	for feature in iter_drive_features(input_file):
+	for feature_index, feature in enumerate(iter_drive_features(input_file), start=1):
+		if progress_log_interval and feature_index % progress_log_interval == 0:
+			print(f'Processed {feature_index} features from {os.path.basename(input_file)}')
+
 		properties = feature.get('properties', {})
 		feature_time = properties.get('Time')
 		vehicle_id = properties.get('VehicleId')
@@ -264,13 +388,7 @@ def build_drive_grid_passes(input_file, grid_file, radius_threshold_meters=DEFAU
 			radius_threshold_meters,
 			heading_degrees=segment_heading,
 		):
-			point['passes'].append({
-				'time': feature_time,
-				'vehicle_id': vehicle_id,
-				'online': online,
-				'distance_meters': round(distance_meters, 1),
-				'heading': round(segment_heading),
-			})
+			point['passes'].append(vehicle_id)
 			total_pass_count += 1
 
 	active_point_count = sum(1 for point in grid_points if point['passes'])
@@ -281,6 +399,7 @@ def build_drive_grid_passes(input_file, grid_file, radius_threshold_meters=DEFAU
 			'raw_grid_point_count': raw_point_count,
 			'active_point_count': active_point_count,
 			'total_pass_count': total_pass_count,
+			'pass_storage': 'vehicle_id_only',
 			'radius_threshold_meters': radius_threshold_meters,
 			'heading_delta_limit_degrees': DEFAULT_GRID_PASS_HEADING_DELTA_DEGREES,
 			'source_file': os.path.basename(input_file),
@@ -294,13 +413,14 @@ def build_drive_heatmap_from_grid_passes(grid_passes_payload, online_only=False,
 	grid_summary = grid_passes_payload.get('summary', {})
 	heatmap_points = []
 	active_coordinate_keys = set()
+	active_point_count = 0
 	max_count = 0
 	total_pass_count = 0
 
 	for point in grid_points:
 		matching_passes = []
 		for pass_event in point.get('passes', []):
-			if online_only and not pass_event.get('online'):
+			if isinstance(pass_event, dict) and online_only and not pass_event.get('online'):
 				continue
 			matching_passes.append(pass_event)
 
@@ -311,7 +431,7 @@ def build_drive_heatmap_from_grid_passes(grid_passes_payload, online_only=False,
 		vehicle_ids = []
 		seen_vehicle_ids = set()
 		for pass_event in matching_passes:
-			vehicle_id = pass_event.get('vehicle_id')
+			vehicle_id = pass_event.get('vehicle_id') if isinstance(pass_event, dict) else pass_event
 			if vehicle_id is None:
 				continue
 			if vehicle_id in seen_vehicle_ids:
@@ -321,7 +441,11 @@ def build_drive_heatmap_from_grid_passes(grid_passes_payload, online_only=False,
 
 		vehicle_ids.sort(key=lambda vehicle_id: str(vehicle_id))
 
-		time_values = [pass_event.get('time') for pass_event in matching_passes if pass_event.get('time')]
+		time_values = [
+			pass_event.get('time')
+			for pass_event in matching_passes
+			if isinstance(pass_event, dict) and pass_event.get('time')
+		]
 		point_lon, point_lat = point.get('coordinates', [None, None])
 		coordinate_key = (point_lon, point_lat)
 		active_coordinate_keys.add(coordinate_key)
@@ -333,9 +457,11 @@ def build_drive_heatmap_from_grid_passes(grid_passes_payload, online_only=False,
 			'first_time': min(time_values) if time_values else None,
 			'last_time': max(time_values) if time_values else None,
 			'dir': point.get('dir'),
+			'source_index': point.get('source_index'),
 		})
 		if include_vehicle_ids:
 			heatmap_points[-1]['vehicle_ids'] = vehicle_ids
+		active_point_count += 1
 		max_count = max(max_count, count)
 		total_pass_count += count
 
@@ -355,6 +481,7 @@ def build_drive_heatmap_from_grid_passes(grid_passes_payload, online_only=False,
 			'first_time': None,
 			'last_time': None,
 			'dir': point.get('dir'),
+			'source_index': point.get('source_index'),
 		})
 		if include_vehicle_ids:
 			heatmap_points[-1]['vehicle_ids'] = []
@@ -363,7 +490,7 @@ def build_drive_heatmap_from_grid_passes(grid_passes_payload, online_only=False,
 		'points': heatmap_points,
 		'summary': {
 			'grid_point_count': grid_summary.get('grid_point_count', len(grid_points)),
-			'active_point_count': len(heatmap_points),
+			'active_point_count': active_point_count,
 			'max_count': max_count,
 			'total_pass_count': total_pass_count,
 			'radius_threshold_meters': grid_summary.get('radius_threshold_meters', DEFAULT_GRID_PASS_RADIUS_METERS),
@@ -388,16 +515,20 @@ def build_drive_heatmap_point_detail(grid_passes_payload, target_lat, target_lng
 
 		matching_passes = []
 		for pass_event in point.get('passes', []):
-			if online_only and not pass_event.get('online'):
+			if isinstance(pass_event, dict) and online_only and not pass_event.get('online'):
 				continue
 			matching_passes.append(pass_event)
 
 		vehicle_ids = sorted({
-			pass_event.get('vehicle_id')
+			pass_event.get('vehicle_id') if isinstance(pass_event, dict) else pass_event
 			for pass_event in matching_passes
-			if pass_event.get('vehicle_id') is not None
+			if (pass_event.get('vehicle_id') if isinstance(pass_event, dict) else pass_event) is not None
 		}, key=lambda vehicle_id: str(vehicle_id))
-		time_values = [pass_event.get('time') for pass_event in matching_passes if pass_event.get('time')]
+		time_values = [
+			pass_event.get('time')
+			for pass_event in matching_passes
+			if isinstance(pass_event, dict) and pass_event.get('time')
+		]
 		return {
 			'lat': point_lat,
 			'lng': point_lon,
@@ -538,7 +669,15 @@ def find_vehicle_pass_timepoints(input_file, target_coord, radius_threshold_mete
 	return matching_timepoints
 
 
-def filter_drive_data(input_file, output_file, loc_box, time_range, max_features=None):
+def filter_drive_data(
+	input_file,
+	output_file,
+	loc_box,
+	time_range,
+	max_features=None,
+	corridor_index=None,
+	corridor_radius_meters=DEFAULT_CORRIDOR_RADIUS_METERS,
+):
 	filtered_features = []
 	filtered_count = 0
 	for index, feature in enumerate(iter_drive_features(input_file)):
@@ -550,9 +689,15 @@ def filter_drive_data(input_file, output_file, loc_box, time_range, max_features
 		elif feature_time < time_range['start']:		
 			continue
 		coordinates = feature['geometry']['coordinates']
-		#print(f"Feature {index}: Coordinates: {coordinates}")
-		# Check if the coordinates are within the specified bounding box
-		if all(loc_box['lon_min'] <= lon <= loc_box['lon_max'] and loc_box['lat_min'] <= lat <= loc_box['lat_max'] for lon, lat in coordinates):
+		if corridor_index is not None:
+			keep_feature = feature_matches_corridor(feature, corridor_index, corridor_radius_meters)
+		else:
+			keep_feature = all(
+				loc_box['lon_min'] <= lon <= loc_box['lon_max'] and loc_box['lat_min'] <= lat <= loc_box['lat_max']
+				for lon, lat in coordinates
+			)
+
+		if keep_feature:
 			filtered_features.append(feature)
 			filtered_count += 1
 		if max_features is not None and filtered_count >= max_features:
@@ -578,6 +723,10 @@ if __name__ == "__main__":
 	argument_parser.add_argument('-t', '--time', type=str, help='Filter data for a specific time range (start,end) in ISO format.')
 	argument_parser.add_argument('-g', '--grid', action='store_true', help='Get representative locations to form a map grid json file.')
 	argument_parser.add_argument('-p', '--grid_passes', action='store_true', help='Build a per-day grid pass json file from BayArea_Grid.json.')
+	argument_parser.add_argument('--corridor-geojson', type=str, help='Optional GeoJSON corridor file used for proximity-based filtering.')
+	argument_parser.add_argument('--corridor-radius-meters', type=float, default=DEFAULT_CORRIDOR_RADIUS_METERS, help='Maximum distance to the corridor geometry in meters. Default: 100.')
+	argument_parser.add_argument('--output-file', type=str, help='Optional explicit output file name written under the work directory.')
+	argument_parser.add_argument('--filter-label', type=str, help='Optional label used in the default output file name prefix.')
 	args = argument_parser.parse_args()
 
 	# Example usage
@@ -595,9 +744,9 @@ if __name__ == "__main__":
 	else:
 		time_range = DEFAULT_SOURCE_TIME_RANGE
 
-	work_dir = '/home/cdw/maps/xml'
+	work_dir = '/home/cdw/maps/vizz'
 	base_date = '2026-06-24' if args.date is None else args.date
-	drive_file = f'BayArea_{base_date}_Get_Drives_All.json'
+	drive_file = f'BayArea_Get_Drives_{base_date}.json'
 	filter_loc_mark = 'BayArea'
 	filter_dateq_mark = args.date or infer_drive_file_date(drive_file)
 
@@ -628,7 +777,20 @@ if __name__ == "__main__":
 		raise SystemExit(0)
 
 	data_file = args.input_file if args.input_file else 'Get_Drives_All.json'
-	filter_loc_mark = 'BayArea'
+	filter_loc_mark = args.filter_label or 'BayArea'
 	filter_dateq_mark = args.date or infer_drive_file_date(data_file)
 	max_features = 2000
-	filter_drive_data(f'{work_dir}/{data_file}', f'{work_dir}/{filter_loc_mark}_{filter_dateq_mark}_{data_file}', location_box, time_range, max_features=None)
+	corridor_index = None
+	if args.corridor_geojson:
+		corridor_index = build_corridor_segment_index(args.corridor_geojson, args.corridor_radius_meters)
+
+	output_file = args.output_file or f'{filter_loc_mark}_{filter_dateq_mark}_{data_file}'
+	filter_drive_data(
+		f'{work_dir}/{data_file}',
+		f'{work_dir}/{output_file}',
+		location_box,
+		time_range,
+		max_features=None,
+		corridor_index=corridor_index,
+		corridor_radius_meters=args.corridor_radius_meters,
+	)
