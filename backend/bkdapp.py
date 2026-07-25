@@ -11,6 +11,7 @@ import sys
 import subprocess
 import logging
 import json
+import csv
 import uvicorn
 import os
 from dotenv import load_dotenv
@@ -59,9 +60,10 @@ markers = [
     # Add more coordinates here
 ]
 
-DRIVE_SOURCE_PATH = Path(__file__).resolve().parent.parent / 'maps' / 'xml' 
+DRIVE_SOURCE_PATH = Path(__file__).resolve().parent.parent / 'maps' / 'vizz' 
 DRIVE_ORG_FILE = 'Get_Drives_All.json'
-DRIVE_FILTERED_FILE = 'Filtered_Get_Drives.json'
+DRIVE_FILTERED_FILE = 'BayArea_Get_Drives'
+PASS_FILTERED_FILE = 'BayArea_Grid_Passes'
 DRIVE_WINDOW_MINUTES = driveFilter.DEFAULT_WINDOW_MINUTES
 DRIVE_WINDOW_OPTIONS = [30, 60, 180, 360, 720, 1440]
 DRIVE_HEATMAP_RADIUS_METERS = driveFilter.DEFAULT_GRID_PASS_RADIUS_METERS
@@ -70,14 +72,167 @@ IMAGE_DATA_PATH = Path(__file__).resolve().parent.parent / 'image-data'
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 MAX_IMAGE_OFFSET = 180
 MAX_IMAGE_RESULTS = 30
+NHS_GEOJSON_FILES = {
+    'interstate_nisr': Path(__file__).resolve().parent.parent / 'maps' / 'gisCal' / 'NHS_interstate_nisr.geojson',
+    'cc_pa': Path(__file__).resolve().parent.parent / 'maps' / 'gisCal' / 'NHS_CC_PA.geojson',
+    'fl_brwd': Path(__file__).resolve().parent.parent / 'maps' / 'gisCal' / 'NHS_FL_Brwd.geojson',
+}
+NHS_CSV_FILES = {
+    'interstate_nisr': Path(__file__).resolve().parent.parent / 'maps' / 'gisCal' / 'NHS_interstate_nisr.csv',
+    'cc_pa': Path(__file__).resolve().parent.parent / 'maps' / 'gisCal' / 'NHS_CC_PA.csv',
+    'fl_brwd': Path(__file__).resolve().parent.parent / 'maps' / 'gisCal' / 'NHS_FL_Brwd.csv',
+}
+NHS_DATASET_JOIN_KEYS = {
+    'interstate_nisr': 'OBJECTID',
+    'cc_pa': 'OBJECTID',
+    'fl_brwd': 'FID',
+}
+NHS_DATASET_LENGTH_FIELDS = {
+    'interstate_nisr': 'Shape_Length',
+    'cc_pa': 'Shape_Length',
+    'fl_brwd': 'Shape_Leng',
+}
+DRIVE_HEATMAP_DATASETS = {
+    'ca_shs': {
+        'file_glob': 'CA_SHS_Grid_Passes_*.json',
+        'file_prefix': 'CA_SHS_Grid_Passes_',
+        'label': 'CA SHS Grid Passes',
+    },
+	'cc_pa': {
+		'file_glob': 'CC_PA_Grid_Passes_*.json',
+		'file_prefix': 'CC_PA_Grid_Passes_',
+		'label': 'CC PA Grid Passes',
+	},
+    'fl_brwd': {
+        'file_glob': 'FL_Brwd_Grid_Pass-*.json',
+        'file_prefix': 'FL_Brwd_Grid_Pass-',
+        'label': 'Florida Broward NHS Grid Passes',
+    },
+}
+
+
+def resolve_named_drive_heatmap_dataset(dataset):
+    dataset_config = DRIVE_HEATMAP_DATASETS.get(dataset)
+    if dataset_config is None:
+        raise ValueError('Drive heatmap dataset is unavailable')
+
+    if dataset_config.get('grid_passes_file'):
+        source_file = Path(dataset_config['grid_passes_file'])
+        if not source_file.exists():
+            raise FileNotFoundError('Drive heatmap grid pass JSON not found')
+        selected_date = dataset_config.get('selected_date') or driveFilter.infer_drive_file_date(source_file.name)
+        return source_file, selected_date, dataset_config
+
+    matching_files = sorted(DRIVE_SOURCE_PATH.glob(dataset_config['file_glob']))
+    if not matching_files:
+        raise FileNotFoundError('Drive heatmap grid pass JSON not found')
+
+    source_file = matching_files[-1]
+    selected_date = driveFilter.infer_drive_file_date(source_file.name)
+    return source_file, selected_date, dataset_config
 
 def load_viz_drive_heatmap_dates():
-    available_dates = []
-    for grid_passes_file in sorted(DRIVE_SOURCE_PATH.glob('BayArea_*_Grid_Passes.json')):
+    available_dates = set()
+    for grid_passes_file in sorted(DRIVE_SOURCE_PATH.glob('BayArea_*Grid_Passes*.json')):
         file_date = driveFilter.infer_drive_file_date(grid_passes_file.name)
         if file_date:
-            available_dates.append(file_date)
-    return available_dates
+            available_dates.add(file_date)
+    return sorted(available_dates)
+
+
+def resolve_grid_passes_file(date_text):
+    candidate_files = [
+        DRIVE_SOURCE_PATH / driveFilter.get_grid_passes_file_name(date_text),
+        DRIVE_SOURCE_PATH / f'{PASS_FILTERED_FILE}_{date_text}.json',
+    ]
+
+    for candidate_file in candidate_files:
+        if candidate_file.exists():
+            return candidate_file
+
+    matching_files = sorted(DRIVE_SOURCE_PATH.glob(f'*{date_text}*Grid_Passes*.json'))
+    if matching_files:
+        return matching_files[-1]
+
+    raise FileNotFoundError('Drive heatmap grid pass JSON not found')
+
+
+def resolve_drive_day_source_file(date_text):
+    candidate_files = [
+        DRIVE_SOURCE_PATH / f'BayArea_Get_Drives_{date_text}.json',
+        # DRIVE_SOURCE_PATH / f'BayArea_{date_text}_Get_Drives_All.json',
+        DRIVE_SOURCE_PATH / f'{DRIVE_FILTERED_FILE}_{date_text}.json',
+    ]
+
+    for candidate_file in candidate_files:
+        if candidate_file.exists():
+            return candidate_file
+
+    matching_files = sorted(DRIVE_SOURCE_PATH.glob(f'*{date_text}*Get_Driv*.json'))
+    if matching_files:
+        return matching_files[-1]
+
+    raise FileNotFoundError('Drive trajectory JSON not found')
+
+
+def resolve_filtered_drive_file():
+    candidate_files = [
+        DRIVE_SOURCE_PATH / f'{DRIVE_FILTERED_FILE}_Plot.json',
+        DRIVE_SOURCE_PATH / DRIVE_ORG_FILE,
+    ]
+
+    for candidate_file in candidate_files:
+        if candidate_file.exists():
+            return candidate_file
+
+    matching_files = sorted(DRIVE_SOURCE_PATH.glob('BayArea_Get_Drives_*.json'))
+    if matching_files:
+        return matching_files[-1]
+
+    raise FileNotFoundError('Drive trajectory JSON not found')
+
+
+@lru_cache(maxsize=16)
+def load_grid_source_indices(grid_file_name):
+    grid_file = DRIVE_SOURCE_PATH / grid_file_name
+    if not grid_file.exists():
+        return {}
+
+    with grid_file.open('r', encoding='utf-8') as handle:
+        grid_payload = json.load(handle)
+
+    raw_grid_points = grid_payload.get('points', []) if isinstance(grid_payload, dict) else grid_payload
+    source_indices = {}
+    for source_index, point in enumerate(raw_grid_points):
+        coordinates = point.get('coordinates', [])
+        if len(coordinates) < 2:
+            continue
+        coord_key = (round(float(coordinates[0]), 6), round(float(coordinates[1]), 6))
+        source_indices.setdefault(coord_key, source_index)
+
+    return source_indices
+
+
+def attach_grid_source_indices(grid_passes_payload):
+    grid_file_name = (grid_passes_payload.get('summary') or {}).get('grid_file')
+    if not grid_file_name:
+        return grid_passes_payload
+
+    source_indices = load_grid_source_indices(grid_file_name)
+    if not source_indices:
+        return grid_passes_payload
+
+    for point in grid_passes_payload.get('points', []):
+        if point.get('source_index') is not None:
+            continue
+        coordinates = point.get('coordinates', [])
+        if len(coordinates) < 2:
+            continue
+        coord_key = (round(float(coordinates[0]), 6), round(float(coordinates[1]), 6))
+        if coord_key in source_indices:
+            point['source_index'] = source_indices[coord_key]
+
+    return grid_passes_payload
 
 
 def parse_drive_image_file(image_path):
@@ -239,9 +394,73 @@ async def get_viz_drive_image(relative_path: str):
     return FileResponse(resolved_image_path)
 
 
+@lru_cache(maxsize=len(NHS_GEOJSON_FILES))
+def load_nhs_geojson(dataset):
+    geojson_path = NHS_GEOJSON_FILES.get(dataset)
+    if geojson_path is None:
+        raise ValueError('Invalid NHS GeoJSON dataset')
+
+    if not geojson_path.exists():
+        raise FileNotFoundError('NHS GeoJSON not found')
+
+    with geojson_path.open('r', encoding='utf-8') as handle:
+        geojson_data = json.load(handle)
+
+    csv_shape_lengths = load_nhs_csv_shape_lengths(dataset)
+    join_key = NHS_DATASET_JOIN_KEYS.get(dataset, 'OBJECTID')
+    for feature in geojson_data.get('features', []):
+        properties = feature.get('properties') or {}
+        feature_key = str(properties.get(join_key, '')).strip()
+        if feature_key in csv_shape_lengths:
+            properties['Shape_Length'] = csv_shape_lengths[feature_key]
+        feature['properties'] = properties
+
+    return geojson_data
+
+
+@lru_cache(maxsize=len(NHS_CSV_FILES))
+def load_nhs_csv_shape_lengths(dataset):
+    csv_path = NHS_CSV_FILES.get(dataset)
+    if csv_path is None:
+        raise ValueError('Invalid NHS CSV dataset')
+
+    if not csv_path.exists():
+        raise FileNotFoundError('NHS CSV not found')
+
+    shape_lengths = {}
+    join_key = NHS_DATASET_JOIN_KEYS.get(dataset, 'OBJECTID')
+    length_field = NHS_DATASET_LENGTH_FIELDS.get(dataset, 'Shape_Length')
+    with csv_path.open(newline='', encoding='utf-8-sig') as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            feature_key = row.get(join_key, '').strip()
+            if not feature_key:
+                continue
+
+            try:
+                shape_lengths[feature_key] = float(row.get(length_field, 0) or 0)
+            except ValueError:
+                continue
+
+    return shape_lengths
+
+
+@app.get('/api/viz_nhs_geojson')
+async def get_viz_nhs_geojson(dataset: str):
+    if dataset not in NHS_GEOJSON_FILES or dataset not in NHS_CSV_FILES:
+        return JSONResponse({'error': 'Invalid NHS GeoJSON dataset'}, status_code=400)
+
+    try:
+        return JSONResponse(load_nhs_geojson(dataset))
+    except FileNotFoundError:
+        return JSONResponse({'error': 'NHS source file not found'}, status_code=404)
+    except json.JSONDecodeError as exc:
+        return JSONResponse({'error': f'Failed to parse NHS GeoJSON: {exc}'}, status_code=500)
+
+
 @lru_cache(maxsize=1)
 def load_viz_cameras():
-    camera_file = Path(__file__).resolve().parent.parent / 'maps' / 'xml' / 'CamerasInPolygon.xml'
+    camera_file = Path(__file__).resolve().parent.parent / 'maps' / 'vizz' / 'CamerasInPolygon.xml'
 
     if not camera_file.exists():
         raise FileNotFoundError('Camera XML not found')
@@ -280,10 +499,7 @@ def load_viz_cameras():
 
 @lru_cache(maxsize=1)
 def load_viz_drives():
-    drive_file = DRIVE_SOURCE_PATH / DRIVE_FILTERED_FILE
-
-    if not drive_file.exists():
-        raise FileNotFoundError('Drive trajectory JSON not found')
+    drive_file = resolve_filtered_drive_file()
 
     with drive_file.open('r', encoding='utf-8') as handle:
         drive_data = json.load(handle)
@@ -335,7 +551,7 @@ def load_drive_grid_passes(source_file_text):
         raise FileNotFoundError('Drive grid pass JSON not found')
 
     with source_file.open('r', encoding='utf-8') as handle:
-        return json.load(handle)
+        return attach_grid_source_indices(json.load(handle))
 
 
 @lru_cache(maxsize=32)
@@ -408,6 +624,18 @@ def load_viz_drive_source_bounds():
     return driveFilter.DEFAULT_SOURCE_TIME_RANGE
 
 
+def load_named_drive_heatmap_dataset(dataset, online_only):
+    source_file, selected_date, dataset_config = resolve_named_drive_heatmap_dataset(dataset)
+    heatmap_payload = load_viz_drive_heatmap(str(source_file), online_only)
+    heatmap_payload['summary']['selected_date'] = selected_date
+    heatmap_payload['summary']['available_dates'] = [selected_date] if selected_date else []
+    heatmap_payload['summary']['radius_threshold_meters'] = DRIVE_HEATMAP_RADIUS_METERS
+    heatmap_payload['summary']['online_only'] = online_only
+    heatmap_payload['summary']['dataset'] = dataset
+    heatmap_payload['summary']['dataset_label'] = dataset_config.get('label', dataset)
+    return heatmap_payload
+
+
 def build_drive_window(start_time_text=None, window_minutes=None):
     source_bounds = load_viz_drive_source_bounds()
     default_start = source_bounds.get('start')
@@ -437,9 +665,10 @@ def build_drive_window(start_time_text=None, window_minutes=None):
 def refresh_viz_drives(start_time_text=None, window_minutes=None):
     window = build_drive_window(start_time_text, window_minutes)
     filter_date = driveFilter.get_source_file_date(window['start'])
+    source_drive_file = resolve_drive_day_source_file(filter_date)
     driveFilter.filter_drive_data(
-        str(DRIVE_SOURCE_PATH / f"BayArea_{filter_date}_{DRIVE_ORG_FILE}"),
-        str(DRIVE_SOURCE_PATH / DRIVE_FILTERED_FILE),
+        str(source_drive_file),
+        str(DRIVE_SOURCE_PATH / f"{DRIVE_FILTERED_FILE}_Plot.json"),
         driveFilter.DEFAULT_FILTER_LOC_BOX,
         window,
         max_features=None,
@@ -508,7 +737,7 @@ async def get_viz_drive_heatmap(start_time: str | None = None, radius_meters: fl
         if abs(selected_radius_meters - DRIVE_HEATMAP_RADIUS_METERS) > 1e-9:
             raise ValueError(f'Only precomputed radius {DRIVE_HEATMAP_RADIUS_METERS:g} m is available')
 
-        source_file = DRIVE_SOURCE_PATH / driveFilter.get_grid_passes_file_name(selected_date)
+        source_file = resolve_grid_passes_file(selected_date)
         heatmap_payload = load_viz_drive_heatmap(str(source_file), online_only)
         heatmap_payload['summary']['selected_time_start'] = selected_start
         heatmap_payload['summary']['selected_date'] = selected_date
@@ -516,6 +745,16 @@ async def get_viz_drive_heatmap(start_time: str | None = None, radius_meters: fl
         heatmap_payload['summary']['radius_threshold_meters'] = selected_radius_meters
         heatmap_payload['summary']['online_only'] = online_only
         return JSONResponse(heatmap_payload)
+    except FileNotFoundError:
+        return JSONResponse({"error": "Drive heatmap grid pass JSON not found"}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+@app.get('/api/viz_drive_heatmap_dataset')
+async def get_viz_drive_heatmap_dataset(dataset: str, online_only: bool = False):
+    try:
+        return JSONResponse(load_named_drive_heatmap_dataset(dataset, online_only))
     except FileNotFoundError:
         return JSONResponse({"error": "Drive heatmap grid pass JSON not found"}, status_code=404)
     except ValueError as exc:
@@ -533,7 +772,7 @@ async def get_viz_drive_heatmap_point(lat: float, lng: float, online_only: bool 
         if available_dates and selected_date not in available_dates:
             raise ValueError(f'Drive heatmap data is unavailable for {selected_date}')
 
-        source_file = DRIVE_SOURCE_PATH / driveFilter.get_grid_passes_file_name(selected_date)
+        source_file = resolve_grid_passes_file(selected_date)
         point_detail = load_viz_drive_heatmap_point_detail(str(source_file), round(lat, 6), round(lng, 6), online_only)
         return JSONResponse({
             'point': point_detail,

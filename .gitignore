@@ -23,3 +23,9 @@ auth/
 venv/
 # backend/port_split.py
 # backend/dataStore.py
+
+# Ignore local image archive data
+image-data/
+
+# Ignore generated visualization datasets
+maps/vizz/

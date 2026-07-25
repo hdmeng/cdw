@@ -231,6 +231,39 @@
             display: flex;
             align-items: center;
         }
+        .roadway-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(320px, 1fr));
+            gap: 20px;
+        }
+        .roadway-card {
+            border: 2px solid #165391;
+            background: #f8fafc;
+            padding: 16px;
+        }
+        .roadway-card h3 {
+            margin: 0 0 10px;
+            color: #165391;
+            font-size: 20px;
+        }
+        .roadway-summary {
+            margin-bottom: 12px;
+            color: #0f172a;
+            background: #eef6ff;
+        }
+        .roadway-map {
+            height: 720px;
+            width: 100%;
+            border: 2px solid #165391;
+        }
+        @media (max-width: 1100px) {
+            .roadway-grid {
+                grid-template-columns: 1fr;
+            }
+            .roadway-map {
+                height: 560px;
+            }
+        }
     </style>
     <script>
         const API_BASE = window.location.protocol === 'https:'
@@ -251,6 +284,10 @@
         let cameraMap;
         let cameraDataPromise;
         let cameraMarkers = [];
+        let roadwayInfoWindow;
+        const roadwayMapInstances = new Map();
+        const roadwayDataPromises = new Map();
+        const roadwayLayerLoaded = new Set();
         let driveMap;
         let driveDataPromise;
         let drivePolylines = [];
@@ -274,6 +311,15 @@
         let driveHeatmapInfoPoint = null;
         let driveHeatmapHasInitialFit = false;
         let driveHeatmapReloadTimer;
+        const roadwayHeatmapInstances = new Map();
+        const roadwayHeatmapDataPromises = new Map();
+        const roadwayHeatmapMarkersByDataset = new Map();
+        const roadwayHeatmapPointsByDataset = new Map();
+        const roadwayHeatmapSummaryByDataset = new Map();
+        const roadwayHeatmapVisiblePointCounts = new Map();
+        const roadwayHeatmapLegends = new Map();
+        const roadwayHeatmapInfoWindows = new Map();
+        const roadwayHeatmapHasInitialFit = new Set();
         let driveLayerInitialized = false;
         let driveSliderInitialized = false;
         let driveReloadTimer;
@@ -284,10 +330,10 @@
         let cameraBounds;
         let sysMap_notloaded = true;
         const DRIVE_HEATMAP_POINT_SCALE = 4.5;
-        const DRIVE_HEATMAP_RENDER_MIN_ZOOM = 11;
+        const DRIVE_HEATMAP_RENDER_MIN_ZOOM = 9;
         const DRIVE_HEATMAP_INFO_MIN_ZOOM = 11;
         const ENABLE_DRIVE_HEATMAP = true;
-        const TAB_NAMES = new Set(['scene', 'sysMap', 'cameraMap', 'support']);
+        const TAB_NAMES = new Set(['scene', 'sysMap', 'cameraMap', 'roadwayMap', 'support']);
         const CAMERA_MAP_SECTION_SCROLL_OFFSET = 16;
         const CAMERA_MAP_SECTION_IDS = new Map([
             ['camera', 'camera'],
@@ -299,7 +345,224 @@
             ['heatmap', 'heatmap'],
             ['drive-heatmap', 'heatmap']
         ]);
+        const ROADWAY_DATASETS = {
+            interstate_nisr: {
+                mapElementId: 'roadwayInterstateMap',
+                summaryElementId: 'roadwayInterstateSummary',
+                datasetLabel: 'Interstate and NISR',
+                color: '#d97706',
+            },
+            cc_pa: {
+                mapElementId: 'roadwayCcMap',
+                summaryElementId: 'roadwayCcSummary',
+                datasetLabel: 'CC PA and SHS 004/024',
+                color: '#0f766e',
+            },
+            fl_brwd: {
+                mapElementId: 'roadwayFlBrwdMap',
+                summaryElementId: 'roadwayFlBrwdSummary',
+                datasetLabel: 'Florida Broward NHS',
+                color: '#9333ea',
+            },
+            fl_brwd_heatmap: {
+                mapElementId: 'roadwayFlBrwdHeatmapMap',
+                summaryElementId: 'roadwayFlBrwdHeatmapSummary',
+                datasetLabel: 'Coverage on Florida Broward NHS',
+                heatmapDataset: 'fl_brwd',
+            },
+            ca_shs_heatmap: {
+                mapElementId: 'roadwayShsHeatmapMap',
+                summaryElementId: 'roadwayShsHeatmapSummary',
+                datasetLabel: 'Coverage on CA Highways',
+                heatmapDataset: 'ca_shs',
+            },
+            cc_pa_heatmap: {
+                mapElementId: 'roadwayCcHeatmapMap',
+                summaryElementId: 'roadwayCcHeatmapSummary',
+                datasetLabel: 'Coverage on CC County Principal Arterials',
+                heatmapDataset: 'cc_pa',
+            },
+        };
 		const DEFAULT_IMAGE_OFFSET_SECONDS = 180;
+
+        function formatRoadwayLengthMeters(lengthMeters) {
+            const kilometers = lengthMeters / 1000;
+            const miles = lengthMeters / 1609.344;
+            return `${kilometers.toFixed(1)} km (${miles.toFixed(1)} mi)`;
+        }
+
+        function summarizeRoadwayGeoJson(geojson) {
+            const features = Array.isArray(geojson.features) ? geojson.features : [];
+            const totalLength = features.reduce((sum, feature) => {
+                const lengthValue = Number(feature?.properties?.Shape_Length ?? 0);
+                return sum + (Number.isFinite(lengthValue) ? lengthValue : 0);
+            }, 0);
+            return {
+                featureCount: features.length,
+                totalLength,
+            };
+        }
+
+        function extendBoundsFromCoordinates(bounds, coordinates) {
+            if (!Array.isArray(coordinates)) {
+                return;
+            }
+
+            if (coordinates.length >= 2 && typeof coordinates[0] === 'number' && typeof coordinates[1] === 'number') {
+                bounds.extend({ lat: coordinates[1], lng: coordinates[0] });
+                return;
+            }
+
+            coordinates.forEach(entry => extendBoundsFromCoordinates(bounds, entry));
+        }
+
+        function getRoadwayBounds(geojson) {
+            const bounds = new google.maps.LatLngBounds();
+            const features = Array.isArray(geojson.features) ? geojson.features : [];
+            features.forEach(feature => extendBoundsFromCoordinates(bounds, feature?.geometry?.coordinates));
+            return bounds;
+        }
+
+        async function fetchRoadwayGeoJson(dataset) {
+            if (!roadwayDataPromises.has(dataset)) {
+                const url = `${API_BASE}/api/viz_nhs_geojson?dataset=${encodeURIComponent(dataset)}`;
+                const request = fetch(url).then(async response => {
+                    if (!response.ok) {
+                        throw new Error(`Roadway GeoJSON API returned ${response.status}`);
+                    }
+                    return response.json();
+                });
+                roadwayDataPromises.set(dataset, request);
+            }
+            return roadwayDataPromises.get(dataset);
+        }
+
+        function buildRoadwayFeatureInfo(properties) {
+            const shapeLength = Number(properties.Shape_Length ?? 0);
+            const formattedLength = Number.isFinite(shapeLength)
+                ? formatRoadwayLengthMeters(shapeLength)
+                : 'n/a';
+            const routeLabel = properties.RouteID || properties.ROADWAY || 'Unknown route';
+            const categoryLabel = properties.NHS_TYPE || properties.COUNTY || 'n/a';
+            const fromLabel = properties.FromARMeasure ?? properties.BEGIN_POST ?? 'n/a';
+            const toLabel = properties.ToARMeasure ?? properties.END_POST ?? 'n/a';
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>${routeLabel}</strong><br>
+                    Category: ${categoryLabel}<br>
+                    From AR: ${fromLabel}<br>
+                    To AR: ${toLabel}<br>
+                    Shape Length: ${formattedLength}
+                </div>
+            `;
+        }
+
+        function extractRoadwayFeatureProperties(feature) {
+            if (!feature || !feature.forEachProperty) {
+                return {};
+            }
+
+            const properties = {};
+            feature.forEachProperty((value, key) => {
+                properties[key] = value;
+            });
+            return properties;
+        }
+
+        async function renderRoadwayDataset(dataset) {
+            const config = ROADWAY_DATASETS[dataset];
+            const summaryElement = document.getElementById(config.summaryElementId);
+            const mapElement = document.getElementById(config.mapElementId);
+
+            if (!summaryElement || !mapElement) {
+                return;
+            }
+
+            summaryElement.textContent = `Loading ${config.datasetLabel} roadways...`;
+
+            let mapInstance = roadwayMapInstances.get(dataset);
+            if (!mapInstance) {
+                mapInstance = new google.maps.Map(mapElement, {
+                    zoom: 9,
+                    center: { lat: 37.9, lng: -122.1 },
+                    mapTypeId: 'roadmap',
+                });
+                roadwayMapInstances.set(dataset, mapInstance);
+            }
+
+            const geojson = await fetchRoadwayGeoJson(dataset);
+            const summary = summarizeRoadwayGeoJson(geojson);
+            summaryElement.textContent = `${config.datasetLabel}: ${summary.featureCount} features, ${formatRoadwayLengthMeters(summary.totalLength)} total`;
+
+            if (!roadwayLayerLoaded.has(dataset)) {
+                mapInstance.data.addGeoJson(geojson);
+                mapInstance.data.setStyle({
+                    strokeColor: config.color,
+                    strokeOpacity: 0.9,
+                    strokeWeight: 4,
+                    fillOpacity: 0,
+                });
+
+                mapInstance.data.addListener('click', event => {
+                    if (!roadwayInfoWindow) {
+                        roadwayInfoWindow = new google.maps.InfoWindow();
+                    }
+                    roadwayInfoWindow.setContent(buildRoadwayFeatureInfo(extractRoadwayFeatureProperties(event.feature)));
+                    roadwayInfoWindow.setPosition(event.latLng);
+                    roadwayInfoWindow.open(mapInstance);
+                });
+
+                const bounds = getRoadwayBounds(geojson);
+                if (!bounds.isEmpty()) {
+                    mapInstance.fitBounds(bounds, 30);
+                }
+                roadwayLayerLoaded.add(dataset);
+            }
+        }
+
+        async function renderRoadwayMaps() {
+            try {
+                if (!mapsScriptLoaded || typeof google === 'undefined' || !google.maps) {
+                    await loadGMPsAPI();
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+
+                await Promise.all([
+                    renderRoadwayDataset('interstate_nisr'),
+                    renderRoadwayHeatmap('ca_shs_heatmap'),
+                    renderRoadwayDataset('cc_pa'),
+                    renderRoadwayHeatmap('cc_pa_heatmap'),
+                    renderRoadwayDataset('fl_brwd'),
+                    renderRoadwayHeatmap('fl_brwd_heatmap'),
+                ]);
+            } catch (error) {
+                console.error('Error rendering roadway maps:', error);
+                const roadwayInterstateSummary = document.getElementById('roadwayInterstateSummary');
+                const roadwayShsHeatmapSummary = document.getElementById('roadwayShsHeatmapSummary');
+                const roadwayCcSummary = document.getElementById('roadwayCcSummary');
+                const roadwayCcHeatmapSummary = document.getElementById('roadwayCcHeatmapSummary');
+                const roadwayFlBrwdSummary = document.getElementById('roadwayFlBrwdSummary');
+                const roadwayFlBrwdHeatmapSummary = document.getElementById('roadwayFlBrwdHeatmapSummary');
+                if (roadwayInterstateSummary) {
+                    roadwayInterstateSummary.textContent = `Failed to load roadway map: ${error.message}`;
+                }
+                if (roadwayShsHeatmapSummary) {
+                    roadwayShsHeatmapSummary.textContent = `Failed to load roadway map: ${error.message}`;
+                }
+                if (roadwayCcSummary) {
+                    roadwayCcSummary.textContent = `Failed to load roadway map: ${error.message}`;
+                }
+                if (roadwayCcHeatmapSummary) {
+                    roadwayCcHeatmapSummary.textContent = `Failed to load roadway map: ${error.message}`;
+                }
+                if (roadwayFlBrwdSummary) {
+                    roadwayFlBrwdSummary.textContent = `Failed to load roadway map: ${error.message}`;
+                }
+                if (roadwayFlBrwdHeatmapSummary) {
+                    roadwayFlBrwdHeatmapSummary.textContent = `Failed to load roadway map: ${error.message}`;
+                }
+            }
+        }
 
         async function importGMPLib() {
             const { AdvancedMarkerElement } = await google.maps.importLibrary("marker");
@@ -676,6 +939,39 @@
         	heatmapCount.textContent = `Daily roadway probings heatmap for ${summary.selected_date || 'n/a'}: ${summary.grid_point_count ?? driveHeatmapPoints.length} grid points; ${connectionLabel}; Total pass hits ${totalPassCount}, max probe count ${summary.max_count ?? 0}`;
         }
 
+        function getHeatmapSegmentLengthMeters(zoomLevel) {
+            if (zoomLevel <= 7) {
+                return 220;
+            }
+            if (zoomLevel <= 9) {
+                return 140;
+            }
+            if (zoomLevel <= 11) {
+                return 90;
+            }
+            return 55;
+        }
+
+        function getHeatmapSegmentPath(point, zoomLevel) {
+            const heading = Number.isFinite(Number(point?.dir)) && Number(point.dir) >= 0
+                ? Number(point.dir)
+                : 90;
+            const halfLengthMeters = getHeatmapSegmentLengthMeters(zoomLevel) / 2;
+            const start = projectHeadingPoint(point.lat, point.lng, heading + 180, halfLengthMeters);
+            const end = projectHeadingPoint(point.lat, point.lng, heading, halfLengthMeters);
+            return [start, end];
+        }
+
+        function buildHeatmapSegmentStyle(point, zoomLevel) {
+            return {
+                path: getHeatmapSegmentPath(point, zoomLevel),
+                strokeColor: getHeatmapColor(point.count || 0),
+                strokeOpacity: 0.92,
+                strokeWeight: zoomLevel >= 11 ? 6 : zoomLevel >= 9 ? 5 : 4,
+                clickable: true,
+            };
+        }
+
         function updateDriveHeatmapViewport() {
             if (!driveHeatmap) {
                 return;
@@ -686,26 +982,14 @@
             driveHeatmapVisiblePointCount = visiblePoints.length;
 
             visiblePoints.forEach(point => {
-                const pinColor = getHeatmapColor(point.count || 0);
-                const pinSvg = encodeURIComponent(`
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="28" viewBox="0 0 18 28">
-                        <path d="M9 1C4.58 1 1 4.58 1 9c0 6.17 8 17 8 17s8-10.83 8-17c0-4.42-3.58-8-8-8z" fill="${pinColor}" stroke="#ffffff" stroke-width="1.5"/>
-                        <circle cx="9" cy="9" r="2.4" fill="#ffffff" fill-opacity="0.9"/>
-                    </svg>
-                `);
 				const zooml = driveHeatmap.getZoom() || 0;
-                const marker = new google.maps.Marker({
-                    position: { lat: point.lat, lng: point.lng },
+                const marker = new google.maps.Polyline({
+                    ...buildHeatmapSegmentStyle(point, zooml),
                     map: driveHeatmap,
-                    icon: {
-                        url: `data:image/svg+xml;charset=UTF-8,${pinSvg}`,
-                        scaledSize: new google.maps.Size((zooml*3-11*3+4)/2, zooml*3-11*3+6),
-                        anchor: new google.maps.Point(zooml*3-11*3+4, zooml*3-11*3+6),
-                    },
                 });
 
-                marker.addListener('click', () => {
-                    openDriveHeatmapPointInfo(point, marker.getPosition());
+                marker.addListener('click', event => {
+                    openDriveHeatmapPointInfo(point, event.latLng || { lat: point.lat, lng: point.lng });
                 });
 
                 driveHeatmapMarkers.push(marker);
@@ -992,11 +1276,7 @@
             return DRIVE_HEATMAP_POINT_SCALE;
         }
 
-        function ensureDriveHeatmapLegend() {
-            if (!driveHeatmap || driveHeatmapLegend) {
-                return;
-            }
-
+        function createHeatmapLegendElement() {
             const legend = document.createElement('div');
             legend.className = 'heatmap-legend';
             legend.innerHTML = `
@@ -1020,6 +1300,15 @@
                     </div>
                 </div>
             `;
+            return legend;
+        }
+
+        function ensureDriveHeatmapLegend() {
+            if (!driveHeatmap || driveHeatmapLegend) {
+                return;
+            }
+
+            const legend = createHeatmapLegendElement();
 
             driveHeatmap.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
             driveHeatmapLegend = legend;
@@ -1043,6 +1332,7 @@
                 <div style="min-width:220px; line-height:1.5;">
                     <strong>Roadway Pass Count</strong><br>
                     Passes: ${point.count}<br>
+                    Grid Points: ${point.point_count ?? 1}<br>
                     <!-- Grid Direction: ${point.dir ?? 'n/a'}<br> -->
                     Vehicles: ${point.vehicle_count ?? 'n/a'}<br>
                     First Pass: ${point.first_time || 'n/a'}<br>
@@ -1072,6 +1362,358 @@
                     <div style="max-height: 180px; overflow-y: auto; border: 1px solid #cbd5e1; padding: 6px; background: #f8fafc;">${vehicleList}</div>
                 </div>
             `;
+        }
+
+        function clearRoadwayHeatmapMarkers(datasetKey) {
+            const markers = roadwayHeatmapMarkersByDataset.get(datasetKey) || [];
+            markers.forEach(marker => marker.setMap(null));
+            roadwayHeatmapMarkersByDataset.set(datasetKey, []);
+            roadwayHeatmapVisiblePointCounts.set(datasetKey, 0);
+        }
+
+        function getRoadwayHeatmapClusterStep(zoom) {
+            if (zoom <= 6) {
+                return 0.45;
+            }
+            if (zoom <= 7) {
+                return 0.22;
+            }
+            if (zoom <= 8) {
+                return 0.12;
+            }
+            if (zoom <= 9) {
+                return 0.06;
+            }
+            if (zoom <= 10) {
+                return 0.03;
+            }
+            return 0;
+        }
+
+        function getRoadwayHeatmapConnectionBreakMeters() {
+            return 450;
+        }
+
+        function getRoadwayHeatmapExtendedConnectionBreakMeters() {
+            return 700;
+        }
+
+        function getRoadwayHeatmapBearingToleranceDegrees() {
+            return 15;
+        }
+
+        function getRoadwayHeatmapPolylineSegmentLimit() {
+            return 10;
+        }
+
+        function getDistanceMeters(lat1, lng1, lat2, lng2) {
+            const earthRadiusMeters = 6371000;
+            const lat1Radians = (lat1 * Math.PI) / 180;
+            const lat2Radians = (lat2 * Math.PI) / 180;
+            const deltaLatRadians = ((lat2 - lat1) * Math.PI) / 180;
+            const deltaLngRadians = ((lng2 - lng1) * Math.PI) / 180;
+            const haversineTerm = (Math.sin(deltaLatRadians / 2) ** 2)
+                + (Math.cos(lat1Radians) * Math.cos(lat2Radians) * (Math.sin(deltaLngRadians / 2) ** 2));
+            return 2 * earthRadiusMeters * Math.asin(Math.sqrt(haversineTerm));
+        }
+
+        function getBearingDegrees(lat1, lng1, lat2, lng2) {
+            const lat1Radians = (lat1 * Math.PI) / 180;
+            const lat2Radians = (lat2 * Math.PI) / 180;
+            const deltaLngRadians = ((lng2 - lng1) * Math.PI) / 180;
+            const y = Math.sin(deltaLngRadians) * Math.cos(lat2Radians);
+            const x = (Math.cos(lat1Radians) * Math.sin(lat2Radians))
+                - (Math.sin(lat1Radians) * Math.cos(lat2Radians) * Math.cos(deltaLngRadians));
+            return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+        }
+
+        function getBearingDeltaDegrees(leftBearing, rightBearing) {
+            const difference = Math.abs(leftBearing - rightBearing) % 360;
+            return difference > 180 ? 360 - difference : difference;
+        }
+
+        function canUseExtendedRoadwayConnection(sortedPoints, index, pairBearing) {
+            const toleranceDegrees = getRoadwayHeatmapBearingToleranceDegrees();
+            const previousPoint = index > 0 ? sortedPoints[index - 1] : null;
+            const nextPoint = index + 2 < sortedPoints.length ? sortedPoints[index + 2] : null;
+
+            if (previousPoint && previousPoint.source_index === sortedPoints[index].source_index - 1) {
+                const previousBearing = getBearingDegrees(
+                    previousPoint.lat,
+                    previousPoint.lng,
+                    sortedPoints[index].lat,
+                    sortedPoints[index].lng,
+                );
+                if (getBearingDeltaDegrees(previousBearing, pairBearing) <= toleranceDegrees) {
+                    return true;
+                }
+            }
+
+            if (nextPoint && nextPoint.source_index === sortedPoints[index + 1].source_index + 1) {
+                const nextBearing = getBearingDegrees(
+                    sortedPoints[index + 1].lat,
+                    sortedPoints[index + 1].lng,
+                    nextPoint.lat,
+                    nextPoint.lng,
+                );
+                if (getBearingDeltaDegrees(nextBearing, pairBearing) <= toleranceDegrees) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        function buildRoadwayHeatmapSegments(points) {
+            const sortedPoints = points
+                .filter(point => Number.isInteger(point.source_index))
+                .slice()
+                .sort((left, right) => left.source_index - right.source_index);
+            const segments = [];
+            const breakDistanceMeters = getRoadwayHeatmapConnectionBreakMeters();
+            const extendedBreakDistanceMeters = getRoadwayHeatmapExtendedConnectionBreakMeters();
+
+            let currentSegment = null;
+
+            for (let index = 0; index < sortedPoints.length - 1; index += 1) {
+                const startPoint = sortedPoints[index];
+                const endPoint = sortedPoints[index + 1];
+                const isAdjacent = endPoint.source_index === startPoint.source_index + 1;
+                const pairDistanceMeters = getDistanceMeters(startPoint.lat, startPoint.lng, endPoint.lat, endPoint.lng);
+                const pairBearing = getBearingDegrees(startPoint.lat, startPoint.lng, endPoint.lat, endPoint.lng);
+                const isNearby = pairDistanceMeters <= breakDistanceMeters;
+                const isExtendedNearby = pairDistanceMeters <= extendedBreakDistanceMeters
+                    && canUseExtendedRoadwayConnection(sortedPoints, index, pairBearing);
+
+                if (!isAdjacent || (!isNearby && !isExtendedNearby)) {
+                    if (currentSegment && currentSegment.path.length >= 2) {
+                        segments.push(currentSegment);
+                    }
+                    currentSegment = null;
+                    continue;
+                }
+
+                const startCount = Number(startPoint.count || 0);
+                const endCount = Number(endPoint.count || 0);
+                const segmentMaxCount = Math.max(startCount, endCount);
+
+                if (!currentSegment) {
+                    currentSegment = {
+                        path: [
+                            { lat: startPoint.lat, lng: startPoint.lng },
+                            { lat: endPoint.lat, lng: endPoint.lng },
+                        ],
+                        maxCount: segmentMaxCount,
+                        totalCount: startCount + endCount,
+                        vehicleCount: (startPoint.vehicle_count || 0) + (endPoint.vehicle_count || 0),
+                        firstTime: startPoint.first_time || endPoint.first_time || null,
+                        lastTime: endPoint.last_time || startPoint.last_time || null,
+                        pointCount: 2,
+                        startIndex: startPoint.source_index,
+                        endIndex: endPoint.source_index,
+                    };
+                } else {
+                    currentSegment.path.push({ lat: endPoint.lat, lng: endPoint.lng });
+                    currentSegment.maxCount = Math.max(currentSegment.maxCount, segmentMaxCount);
+                    currentSegment.totalCount += endCount;
+                    currentSegment.vehicleCount += endPoint.vehicle_count || 0;
+                    currentSegment.firstTime = currentSegment.firstTime && currentSegment.firstTime < endPoint.first_time ? currentSegment.firstTime : (endPoint.first_time || currentSegment.firstTime);
+                    currentSegment.lastTime = currentSegment.lastTime && currentSegment.lastTime > endPoint.last_time ? currentSegment.lastTime : (endPoint.last_time || currentSegment.lastTime);
+                    currentSegment.pointCount += 1;
+                    currentSegment.endIndex = endPoint.source_index;
+                }
+
+                if (currentSegment && currentSegment.pointCount >= getRoadwayHeatmapPolylineSegmentLimit() + 1) {
+                    segments.push(currentSegment);
+                    currentSegment = {
+                        path: [{ lat: endPoint.lat, lng: endPoint.lng }],
+                        maxCount: endCount,
+                        totalCount: endCount,
+                        vehicleCount: endPoint.vehicle_count || 0,
+                        firstTime: endPoint.first_time || null,
+                        lastTime: endPoint.last_time || null,
+                        pointCount: 1,
+                        startIndex: endPoint.source_index,
+                        endIndex: endPoint.source_index,
+                    };
+                }
+            }
+
+            if (currentSegment && currentSegment.path.length >= 2) {
+                segments.push(currentSegment);
+            }
+
+            segments.forEach(segment => {
+                segment.colorLevel = getHeatmapCountLevel(segment.maxCount);
+            });
+
+            return segments;
+        }
+
+        function buildRoadwayHeatmapGroupInfo(group, summary) {
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>Roadway Segment Pass Count</strong><br>
+                    Grid Points Linked: ${group.pointCount}<br>
+                    Source Index Range: ${group.startIndex} to ${group.endIndex}<br>
+                    Pass Count Range: ${group.colorLevel === 0 ? '1-3' : group.colorLevel === 1 ? '4-6' : group.colorLevel === 2 ? '7-9' : group.colorLevel === 3 ? '10-11' : '12+'}<br>
+                    Max Passes on Segment: ${group.maxCount}<br>
+                    Total Pass Hits: ${group.totalCount}<br>
+                    Vehicles: ${group.vehicleCount}<br>
+                    First Pass: ${group.firstTime || 'n/a'}<br>
+                    Last Pass: ${group.lastTime || 'n/a'}<br>
+                    Source File: ${summary.source_file || 'n/a'}
+                </div>
+            `;
+        }
+
+        function getRoadwayHeatmapVisiblePoints(datasetKey) {
+            const roadwayHeatmap = roadwayHeatmapInstances.get(datasetKey);
+            const roadwayHeatmapPoints = roadwayHeatmapPointsByDataset.get(datasetKey) || [];
+            if (!roadwayHeatmap || !roadwayHeatmapPoints.length) {
+                return [];
+            }
+
+            const bounds = roadwayHeatmap.getBounds();
+            if (!bounds) {
+                return [];
+            }
+
+            const northEast = bounds.getNorthEast();
+            const southWest = bounds.getSouthWest();
+            const minLat = southWest.lat();
+            const maxLat = northEast.lat();
+            const minLng = southWest.lng();
+            const maxLng = northEast.lng();
+            const crossesDateLine = minLng > maxLng;
+
+            return roadwayHeatmapPoints.filter(point => {
+                if ((point.count || 0) <= 0) {
+                    return false;
+                }
+
+                const inLat = point.lat >= minLat && point.lat <= maxLat;
+                const inLng = crossesDateLine
+                    ? point.lng >= minLng || point.lng <= maxLng
+                    : point.lng >= minLng && point.lng <= maxLng;
+                return inLat && inLng;
+            });
+        }
+
+        function updateRoadwayHeatmapCountLabel(datasetKey) {
+            const config = ROADWAY_DATASETS[datasetKey];
+            const summaryElement = document.getElementById(config.summaryElementId);
+            if (!summaryElement) {
+                return;
+            }
+
+            const summary = roadwayHeatmapSummaryByDataset.get(datasetKey) || {};
+            const roadwayHeatmapPoints = roadwayHeatmapPointsByDataset.get(datasetKey) || [];
+            const totalPassCount = summary.total_pass_count ?? roadwayHeatmapPoints.reduce((sum, point) => sum + (point.count || 0), 0);
+            const selectedDate = summary.selected_date || 'n/a';
+            const activePointCount = summary.active_point_count ?? roadwayHeatmapPoints.filter(point => (point.count || 0) > 0).length;
+            const roadwayHeatmapVisiblePointCount = roadwayHeatmapVisiblePointCounts.get(datasetKey) || 0;
+            summaryElement.textContent = `${summary.dataset_label || config.datasetLabel} for ${selectedDate}: ${summary.grid_point_count ?? roadwayHeatmapPoints.length} grid points, ${activePointCount} active points; Max pass count ${summary.max_count ?? 0}`;
+        }
+
+        function updateRoadwayHeatmapViewport(datasetKey) {
+            const roadwayHeatmap = roadwayHeatmapInstances.get(datasetKey);
+            if (!roadwayHeatmap) {
+                return;
+            }
+
+            clearRoadwayHeatmapMarkers(datasetKey);
+            const visiblePoints = getRoadwayHeatmapVisiblePoints(datasetKey);
+            const renderedGroups = buildRoadwayHeatmapSegments(visiblePoints);
+            roadwayHeatmapVisiblePointCounts.set(datasetKey, renderedGroups.length);
+            const roadwayHeatmapMarkers = [];
+            const roadwayHeatmapSummary = roadwayHeatmapSummaryByDataset.get(datasetKey) || {};
+
+            renderedGroups.forEach(group => {
+                const marker = new google.maps.Polyline({
+                    path: group.path,
+                    strokeColor: getHeatmapColor(group.maxCount || 0),
+                    strokeOpacity: 0.94,
+                    strokeWeight: 5,
+                    clickable: true,
+                    map: roadwayHeatmap,
+                });
+
+                marker.addListener('click', event => {
+                    let roadwayHeatmapInfoWindow = roadwayHeatmapInfoWindows.get(datasetKey);
+                    if (!roadwayHeatmapInfoWindow) {
+                        roadwayHeatmapInfoWindow = new google.maps.InfoWindow();
+                        roadwayHeatmapInfoWindows.set(datasetKey, roadwayHeatmapInfoWindow);
+                    }
+                    roadwayHeatmapInfoWindow.setContent(buildRoadwayHeatmapGroupInfo(group, roadwayHeatmapSummary));
+                    roadwayHeatmapInfoWindow.setPosition(event.latLng || group.path[0]);
+                    roadwayHeatmapInfoWindow.open(roadwayHeatmap);
+                });
+
+                roadwayHeatmapMarkers.push(marker);
+            });
+
+            roadwayHeatmapMarkersByDataset.set(datasetKey, roadwayHeatmapMarkers);
+            updateRoadwayHeatmapCountLabel(datasetKey);
+        }
+
+        function ensureRoadwayHeatmapLegend(datasetKey) {
+            const roadwayHeatmap = roadwayHeatmapInstances.get(datasetKey);
+            if (!roadwayHeatmap || roadwayHeatmapLegends.has(datasetKey)) {
+                return;
+            }
+
+            const legend = createHeatmapLegendElement();
+            roadwayHeatmap.controls[google.maps.ControlPosition.RIGHT_BOTTOM].push(legend);
+            roadwayHeatmapLegends.set(datasetKey, legend);
+        }
+
+        async function renderRoadwayHeatmap(datasetKey) {
+            const config = ROADWAY_DATASETS[datasetKey];
+            const summaryElement = document.getElementById(config.summaryElementId);
+            const mapElement = document.getElementById(config.mapElementId);
+
+            if (!summaryElement || !mapElement) {
+                return;
+            }
+
+            summaryElement.textContent = `Loading ${config.datasetLabel}...`;
+
+            let roadwayHeatmap = roadwayHeatmapInstances.get(datasetKey);
+            if (!roadwayHeatmap) {
+                roadwayHeatmap = new google.maps.Map(mapElement, {
+                    zoom: 10,
+                    center: { lat: 37.9, lng: -122.1 },
+                    mapTypeId: 'satellite',
+                });
+                roadwayHeatmapInstances.set(datasetKey, roadwayHeatmap);
+                ensureRoadwayHeatmapLegend(datasetKey);
+                roadwayHeatmap.addListener('idle', () => updateRoadwayHeatmapViewport(datasetKey));
+            }
+
+            if (!roadwayHeatmapDataPromises.has(datasetKey)) {
+                roadwayHeatmapDataPromises.set(datasetKey, fetch(`${API_BASE}/api/viz_drive_heatmap_dataset?dataset=${encodeURIComponent(config.heatmapDataset)}`)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Roadway heatmap API returned ${response.status}`);
+                        }
+                        return response.json();
+                    }));
+            }
+
+            const heatmapPayload = await roadwayHeatmapDataPromises.get(datasetKey);
+            const roadwayHeatmapPoints = heatmapPayload.points || [];
+            roadwayHeatmapPointsByDataset.set(datasetKey, roadwayHeatmapPoints);
+            roadwayHeatmapSummaryByDataset.set(datasetKey, heatmapPayload.summary || {});
+
+            const bounds = new google.maps.LatLngBounds();
+            roadwayHeatmapPoints.forEach(point => bounds.extend(point));
+            if (!bounds.isEmpty() && !roadwayHeatmapHasInitialFit.has(datasetKey)) {
+                roadwayHeatmap.fitBounds(bounds, 40);
+                roadwayHeatmapHasInitialFit.add(datasetKey);
+            }
+
+            updateRoadwayHeatmapViewport(datasetKey);
         }
 
         async function openDriveHeatmapPointInfo(point, position) {
@@ -1708,6 +2350,8 @@
                 await renderDriveMap();
                 await renderDriveHeatmap();
                 scheduleRequestedCameraSectionScroll();
+            } else if (tabName === 'roadwayMap') {
+                await renderRoadwayMaps();
             } else if (tabName === 'bsm') {
                 // socket.off('rsu_state');
 
@@ -1739,6 +2383,7 @@
         <a class="tab-links" data-tab="scene" href="#scene" onclick="event.preventDefault(); openTab(event, 'scene');">Test Scene</a>
         <a class="tab-links" data-tab="sysMap" href="#sysMap" onclick="event.preventDefault(); openTab(event, 'sysMap');">System Dashboard</a>
         <a class="tab-links active" data-tab="cameraMap" href="#cameraMap" onclick="event.preventDefault(); openTab(event, 'cameraMap');">Camera Map</a>
+        <a class="tab-links" data-tab="roadwayMap" href="#roadwayMap" onclick="event.preventDefault(); openTab(event, 'roadwayMap');">Roadway Maps</a>
         <a class="tab-links" data-tab="support" href="#support" onclick="event.preventDefault(); openTab(event, 'support');">Support</a>
         <div style="position: absolute; top: 10px; right: 10px; background-color: #f1f1f1; padding: 10px; border: 1px solid #ccc;" id="dateTimeBox">
             Loading date and time...
@@ -1920,6 +2565,43 @@
                 </div>
                 <div id="driveHeatmapContent" style="height: 1120px; width: 100%; border: 2px solid #165391;"></div>
             </section>
+        </div>
+    </div>
+    <div id="roadwayMap" class="tab">
+        <div style="padding: 16px;">
+            <h2 class="map-division-heading">National Highway System Roadway Sets</h2>
+            <div class="roadway-grid">
+                <section class="roadway-card">
+                    <h3>California Interstate and NISR</h3>
+                    <div id="roadwayInterstateSummary" class="state-box roadway-summary">Loading Interstate and NISR roadways...</div>
+                    <div id="roadwayInterstateMap" class="roadway-map"></div>
+                </section>
+                <section class="roadway-card">
+                    <h3>Coverage on CA Highways (Daily Drive Passes)</h3>
+                    <div id="roadwayShsHeatmapSummary" class="state-box roadway-summary">Loading CA SHS drive-pass heatmap...</div>
+                    <div id="roadwayShsHeatmapMap" class="roadway-map"></div>
+                </section>
+                <section class="roadway-card">
+                    <h3>Contra Costa Principal Arterials</h3>
+                    <div id="roadwayCcSummary" class="state-box roadway-summary">Loading CC PA and SHS 004/024 roadways...</div>
+                    <div id="roadwayCcMap" class="roadway-map"></div>
+                </section>
+                <section class="roadway-card">
+                    <h3>Coverage on CC County Principal Arterials (Daily Drive Passes)</h3>
+                    <div id="roadwayCcHeatmapSummary" class="state-box roadway-summary">Loading CC PA drive-pass heatmap...</div>
+                    <div id="roadwayCcHeatmapMap" class="roadway-map"></div>
+                </section>
+                <section class="roadway-card">
+                    <h3>Florida Broward NHS</h3>
+                    <div id="roadwayFlBrwdSummary" class="state-box roadway-summary">Loading Florida Broward NHS roadways...</div>
+                    <div id="roadwayFlBrwdMap" class="roadway-map"></div>
+                </section>
+                <section class="roadway-card">
+                    <h3>Coverage on Florida Broward NHS (Daily Drive Passes)</h3>
+                    <div id="roadwayFlBrwdHeatmapSummary" class="state-box roadway-summary">Loading Florida Broward drive-pass heatmap...</div>
+                    <div id="roadwayFlBrwdHeatmapMap" class="roadway-map"></div>
+                </section>
+            </div>
         </div>
     </div>
     <div id="support" class="tab">

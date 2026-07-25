@@ -1,9 +1,10 @@
 const cv2x = {
     // Private configuration
     _config: {
-        SVR_URL: 'http://128.32.129.118:5000',
-        SVR_IP: '128.32.129.118',
-        SVR_PORT: '5000'
+        // SVR_URL: 'http://128.32.129.118:5000',
+        SVR_URL: 'https://caconnectedvehicletestbed.org/backend',
+        // SVR_IP: '128.32.129.118',
+        // SVR_PORT: '5000'
     },
 
     // Map variables
