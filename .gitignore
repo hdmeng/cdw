@@ -29,3 +29,24 @@ image-data/
 
 # Ignore generated visualization datasets
 maps/vizz/
+maps/gisCal/CRS_-_Functional_Classification.csv
+maps/gisCal/NHS_Caltrans.csv
+maps/gisCal/NHS_Caltrans.geojson
+maps/gisCal/NHS_CC_PA.csv
+maps/gisCal/NHS_CC_PA.geojson
+maps/gisCal/NHS_FDOT.csv
+maps/gisCal/NHS_FDOT.geojson
+maps/gisCal/NHS_FL_Brwd.csv
+maps/gisCal/NHS_FL_Brwd.geojson
+maps/gisCal/NHS_interstate_nisr.csv
+maps/gisCal/NHS_interstate_nisr.geojson
+maps/gisCal/SHN_Lines.csv
+maps/gisCal/State_Highway_Network_Lines.geojson
+beemaps/kml/CC_PA_SHS680_corridor.kml
+beemaps/kml/NHS_CC_PA_corridor.kml
+beemaps/kml/NHS_FL_Brwd_corridor.kml
+beemaps/kml/NHS_interstate_nisr_corridor.kml
+maps/beemaps/cc_pa_heatmap.json
+backend/bkdapp.py.bak-20260725
+backend/bkdapp.py.bak-vizzsplit
+beemaps/.gitignore

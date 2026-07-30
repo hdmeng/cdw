@@ -333,6 +333,22 @@
         const DRIVE_HEATMAP_RENDER_MIN_ZOOM = 9;
         const DRIVE_HEATMAP_INFO_MIN_ZOOM = 11;
         const ENABLE_DRIVE_HEATMAP = true;
+
+        // ---- Bee Maps NHS coverage layer (second feed on the heatmap map) ----
+        // Vizzion counts passes against its own grid points; Bee Maps frames are
+        // snapped onto the NHS centerlines, so every point here lies on the
+        // roadway geometry of the source geojson.
+        let beemapsMarkers = [];
+        let beemapsPoints = [];
+        let beemapsSummary = {};
+        let beemapsDataPromise;
+        let beemapsInfoWindow;
+        let beemapsLegend;
+        const BEEMAPS_DEFAULT_DATASET = 'cc_pa';
+        const BEEMAPS_RENDER_MIN_ZOOM = 10;
+        // Deliberately a different ramp from the Vizzion legend so the two
+        // feeds are never mistaken for each other on the same map.
+        const BEEMAPS_PALETTE = ['#f2e6ff', '#c79bf0', '#9b5de5', '#6a2bb5', '#3d1078'];
         const TAB_NAMES = new Set(['scene', 'sysMap', 'cameraMap', 'roadwayMap', 'support']);
         const CAMERA_MAP_SECTION_SCROLL_OFFSET = 16;
         const CAMERA_MAP_SECTION_IDS = new Map([
@@ -1303,6 +1319,206 @@
             return legend;
         }
 
+        function isBeemapsLayerEnabled() {
+            const toggle = document.getElementById('beemapsLayerToggle');
+            return toggle ? toggle.checked : false;
+        }
+
+        function getBeemapsColor(count) {
+            const maxCount = Math.max(Number(beemapsSummary.max_count) || 1, 1);
+            const ratio = Math.min(Math.max((Number(count) || 0) / maxCount, 0), 1);
+            const index = Math.min(
+                BEEMAPS_PALETTE.length - 1,
+                Math.floor(ratio * BEEMAPS_PALETTE.length),
+            );
+            return BEEMAPS_PALETTE[index];
+        }
+
+        function clearBeemapsMarkers() {
+            beemapsMarkers.forEach(marker => marker.setMap(null));
+            beemapsMarkers = [];
+        }
+
+        function ensureBeemapsLegend() {
+            if (!driveHeatmap || beemapsLegend) {
+                return;
+            }
+
+            const legend = document.createElement('div');
+            legend.className = 'heatmap-legend';
+            legend.id = 'beemapsLegend';
+            legend.innerHTML = `
+                <div class="heatmap-legend-title">Bee Maps passes / 100 m</div>
+                <div class="heatmap-legend-row">
+                    <div class="heatmap-legend-scale" aria-hidden="true">
+                        ${BEEMAPS_PALETTE.map(color =>
+                            `<span class="heatmap-legend-swatch" style="background:${color}"></span>`).join('')}
+                    </div>
+                    <div class="heatmap-legend-labels">
+                        <span class="heatmap-legend-label">low</span>
+                        <span class="heatmap-legend-label"></span>
+                        <span class="heatmap-legend-label"></span>
+                        <span class="heatmap-legend-label"></span>
+                        <span class="heatmap-legend-label">high</span>
+                    </div>
+                </div>
+            `;
+            driveHeatmap.controls[google.maps.ControlPosition.LEFT_BOTTOM].push(legend);
+            beemapsLegend = legend;
+        }
+
+        function setBeemapsLegendVisible(visible) {
+            if (beemapsLegend) {
+                beemapsLegend.style.display = visible ? '' : 'none';
+            }
+        }
+
+        function buildBeemapsInfo(point, summary) {
+            return `
+                <div style="min-width:220px; line-height:1.5;">
+                    <strong>Bee Maps Roadway Coverage</strong><br>
+                    Route: ${point.route_id ?? 'n/a'}<br>
+                    Drives (passes): ${point.count}<br>
+                    First Pass: ${point.first_time || 'n/a'}<br>
+                    Last Pass: ${point.last_time || 'n/a'}<br>
+                    Road Bearing: ${point.dir ?? 'n/a'}&deg;<br>
+                    Network: ${summary.network_file || 'n/a'}<br>
+                    Snap Radius: ${summary.radius_threshold_meters ?? 'n/a'} m<br>
+                    Source: ${summary.source_file || 'n/a'}
+                </div>
+            `;
+        }
+
+        function updateBeemapsCountLabel() {
+            const label = document.getElementById('beemapsCount');
+            if (!label) {
+                return;
+            }
+
+            if (!isBeemapsLayerEnabled()) {
+                label.textContent = 'Bee Maps NHS coverage layer is off.';
+                return;
+            }
+
+            const summary = beemapsSummary || {};
+            const zoom = driveHeatmap ? (driveHeatmap.getZoom() || 0) : 0;
+            const renderNote = zoom < BEEMAPS_RENDER_MIN_ZOOM
+                ? `zoom in to ${BEEMAPS_RENDER_MIN_ZOOM}+ to render points`
+                : `${beemapsMarkers.length} points in view`;
+            label.textContent = `${summary.layer_label || 'Bee Maps coverage'}: `
+                + `${summary.covered_km ?? 0} of ${summary.network_km ?? 0} km covered `
+                + `(${summary.coverage_pct ?? 0}%); ${summary.total_pass_count ?? 0} passes, `
+                + `max ${summary.max_count ?? 0} per ${summary.step_meters ?? 100} m; ${renderNote}`;
+        }
+
+        function updateBeemapsViewport() {
+            if (!driveHeatmap) {
+                return;
+            }
+
+            clearBeemapsMarkers();
+            if (!isBeemapsLayerEnabled() || !beemapsPoints.length) {
+                updateBeemapsCountLabel();
+                return;
+            }
+
+            const zoom = driveHeatmap.getZoom() || 0;
+            const bounds = driveHeatmap.getBounds();
+            if (zoom < BEEMAPS_RENDER_MIN_ZOOM || !bounds) {
+                updateBeemapsCountLabel();
+                return;
+            }
+
+            if (!beemapsInfoWindow) {
+                beemapsInfoWindow = new google.maps.InfoWindow();
+            }
+
+            beemapsPoints.forEach(point => {
+                const position = { lat: point.lat, lng: point.lng };
+                if (!bounds.contains(position)) {
+                    return;
+                }
+
+                const marker = new google.maps.Marker({
+                    position,
+                    map: driveHeatmap,
+                    // Circles, not the Vizzion teardrop pins: at 100 m spacing
+                    // they read as a continuous line along the roadway.
+                    icon: {
+                        path: google.maps.SymbolPath.CIRCLE,
+                        fillColor: getBeemapsColor(point.count),
+                        fillOpacity: 0.95,
+                        scale: Math.max(3, Math.min(7, zoom - 8)),
+                        strokeColor: '#ffffff',
+                        strokeWeight: 1,
+                    },
+                    zIndex: 5,
+                });
+                marker.addListener('click', () => {
+                    beemapsInfoWindow.setContent(buildBeemapsInfo(point, beemapsSummary));
+                    beemapsInfoWindow.setPosition(position);
+                    beemapsInfoWindow.open(driveHeatmap);
+                });
+                beemapsMarkers.push(marker);
+            });
+
+            updateBeemapsCountLabel();
+        }
+
+        async function renderBeemapsHeatmap(forceReload = false) {
+            const label = document.getElementById('beemapsCount');
+            if (!isBeemapsLayerEnabled()) {
+                clearBeemapsMarkers();
+                setBeemapsLegendVisible(false);
+                if (beemapsInfoWindow) {
+                    beemapsInfoWindow.close();
+                }
+                updateBeemapsCountLabel();
+                return;
+            }
+
+            try {
+                if (!driveHeatmap) {
+                    // The Vizzion heatmap owns the map object; it must exist first.
+                    return;
+                }
+                ensureBeemapsLegend();
+                setBeemapsLegendVisible(true);
+
+                if (forceReload) {
+                    beemapsDataPromise = null;
+                }
+                if (!beemapsDataPromise) {
+                    if (label) {
+                        label.textContent = 'Loading Bee Maps NHS coverage...';
+                    }
+                    const dataset = BEEMAPS_DEFAULT_DATASET;
+                    beemapsDataPromise = fetch(`${API_BASE}/api/beemaps_heatmap?dataset=${encodeURIComponent(dataset)}`)
+                        .then(response => {
+                            if (!response.ok) {
+                                throw new Error(`Bee Maps heatmap API returned ${response.status}`);
+                            }
+                            return response.json();
+                        });
+                }
+
+                const payload = await beemapsDataPromise;
+                beemapsPoints = payload.points || [];
+                beemapsSummary = payload.summary || {};
+                updateBeemapsViewport();
+            } catch (error) {
+                console.error('Error rendering Bee Maps heatmap:', error);
+                beemapsDataPromise = null;
+                if (label) {
+                    label.textContent = `Failed to load Bee Maps coverage: ${error.message}`;
+                }
+            }
+        }
+
+        function handleBeemapsLayerToggle() {
+            renderBeemapsHeatmap(false);
+        }
+
         function ensureDriveHeatmapLegend() {
             if (!driveHeatmap || driveHeatmapLegend) {
                 return;
@@ -2208,6 +2424,7 @@
                     driveHeatmap.addListener('idle', () => {
                         updateDriveHeatmapViewport();
                         syncDriveHeatmapInfoWindowVisibility();
+                        updateBeemapsViewport();
                     });
                 }
 
@@ -2349,6 +2566,7 @@
                 await renderCameraMap();
                 await renderDriveMap();
                 await renderDriveHeatmap();
+                await renderBeemapsHeatmap();
                 scheduleRequestedCameraSectionScroll();
             } else if (tabName === 'roadwayMap') {
                 await renderRoadwayMaps();
@@ -2557,10 +2775,23 @@
                             <option value="all" selected>All</option>
                         </select>
                     </div>
+                    <div class="control-stack">
+                        <label for="beemapsLayerToggle" class="control-title">Bee Maps NHS Layer</label>
+                        <label class="switch-control" for="beemapsLayerToggle">
+                            <input id="beemapsLayerToggle" type="checkbox" onchange="handleBeemapsLayerToggle()">
+                            <span class="switch-track"></span>
+                            <span class="switch-copy"></span>
+                        </label>
+                    </div>
                 </div>
                 <div style="display: flex; align-items: center; gap: 12px; margin-top: 20px; margin-bottom: 16px;">
                     <div id="driveHeatmapCount" class="state-box" style="margin-top: 0; margin-bottom: 0; flex: 1; color: #0f172a; background-color: #f8fafc;">
                         Loading daily roadway probings heatmap...
+                    </div>
+                </div>
+                <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+                    <div id="beemapsCount" class="state-box" style="margin-top: 0; margin-bottom: 0; flex: 1; color: #0f172a; background-color: #f5f0ff; border-color: #6a2bb5;">
+                        Bee Maps NHS coverage layer is off.
                     </div>
                 </div>
                 <div id="driveHeatmapContent" style="height: 1120px; width: 100%; border: 2px solid #165391;"></div>
